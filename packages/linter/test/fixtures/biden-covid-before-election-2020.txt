@@ -1,0 +1,2 @@
+This is a market on if presidential candidate Joe Biden will test positive for COVID-19 before November 3rd, 2020. This will be defined as Joe publicly announcing - via any medium, including social media - that he has tested positive for COVID-19, or some variation of that statement. If it is in reference to antibodies, or he doesn’t publicly acknowledge it, the market will resolve to No.
+In the event of ambiguity in terms of the market outcome, the market will be resolved at the sole discretion of the Markets Integrity Committee (MIC).
