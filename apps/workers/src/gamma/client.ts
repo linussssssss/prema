@@ -142,11 +142,12 @@ export async function fetchMarketsPage(params: {
   afterCursor?: string | undefined;
   limit?: number;
   closed?: boolean | undefined;
+  ascending?: boolean;
 }): Promise<MarketsPage> {
   const url = new URL(`${GAMMA_BASE}/markets/keyset`);
   url.searchParams.set("limit", String(params.limit ?? 100));
   url.searchParams.set("order", "id");
-  url.searchParams.set("ascending", "true");
+  url.searchParams.set("ascending", String(params.ascending ?? true));
   url.searchParams.set("include_tag", "true");
   if (params.closed !== undefined) url.searchParams.set("closed", String(params.closed));
   if (params.afterCursor) url.searchParams.set("after_cursor", params.afterCursor);

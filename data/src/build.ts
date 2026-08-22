@@ -10,6 +10,8 @@
  *   DATASET_SKIP_GAMMA  "1" to skip venue ingestion
  *   DATASET_SKIP_CHAIN  "1" to skip on-chain indexing
  *   DATASET_STORE_RAW   "1" to store full Gamma objects (jsonb)
+ *   DATASET_NEWEST_FIRST      "1": crawl Gamma newest-first (capped demo runs)
+ *   DATASET_CHAIN_FROM_RECENT "1": index head-maxBlocks..head (keyless demo)
  */
 import { mkdirSync, writeFileSync } from "node:fs";
 import path from "node:path";
@@ -57,6 +59,7 @@ try {
       const stats = await ingestPolymarketMarkets(handle.db, {
         maxPages,
         storeRaw: caps.DATASET_STORE_RAW === "1",
+        newestFirst: process.env.DATASET_NEWEST_FIRST === "1",
       });
       const capped = maxPages !== undefined;
       step({

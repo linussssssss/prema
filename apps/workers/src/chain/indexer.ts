@@ -139,9 +139,8 @@ export async function indexPolygon(db: Db, opts: IndexOptions = {}): Promise<Ind
   logger.info({ managedOracle }, managedOracle ? "managed oracle resolved on-chain" : "no managed oracle found; indexing OOv2 only");
 
   const stateKey = "chain:polygon:lastBlock";
-  const startBlock =
-    (await getStateBlock(db, stateKey)) ?? (await findBlockByTimestamp(client, DATASET_START));
   const head = (await client.getBlock({ blockTag: "latest" })).number - CONFIRMATIONS.polygon;
+  const { startBlock, fromRecent } = await resolveStartBlock(db, client, stateKey, head, opts);
   const capped = opts.maxBlocks !== undefined && startBlock + opts.maxBlocks < head;
   const endBlock = capped ? startBlock + opts.maxBlocks! : head;
 
@@ -234,16 +233,36 @@ export async function indexPolygon(db: Db, opts: IndexOptions = {}): Promise<Ind
     eventsStored,
     votesStored: 0,
     managedOracle,
-    complete: !capped,
+    complete: !capped && !fromRecent,
   };
+}
+
+/**
+ * Start block resolution: stored cursor wins; otherwise the 2024-01-01
+ * boundary. DATASET_CHAIN_FROM_RECENT=1 (demo runs, keyless RPCs that don't
+ * serve deep history) starts at head-maxBlocks instead and marks the run
+ * incomplete so REPORT.md says so.
+ */
+async function resolveStartBlock(
+  db: Db,
+  client: PublicClient,
+  stateKey: string,
+  head: bigint,
+  opts: IndexOptions,
+): Promise<{ startBlock: bigint; fromRecent: boolean }> {
+  const stored = await getStateBlock(db, stateKey);
+  if (stored !== null) return { startBlock: stored, fromRecent: false };
+  if (process.env.DATASET_CHAIN_FROM_RECENT === "1" && opts.maxBlocks !== undefined) {
+    return { startBlock: head - opts.maxBlocks, fromRecent: true };
+  }
+  return { startBlock: await findBlockByTimestamp(client, DATASET_START), fromRecent: false };
 }
 
 export async function indexEthereum(db: Db, opts: IndexOptions = {}): Promise<IndexStats> {
   const client = makeClient("ethereum");
   const stateKey = "chain:ethereum:lastBlock";
-  const startBlock =
-    (await getStateBlock(db, stateKey)) ?? (await findBlockByTimestamp(client, DATASET_START));
   const head = (await client.getBlock({ blockTag: "latest" })).number - CONFIRMATIONS.ethereum;
+  const { startBlock, fromRecent } = await resolveStartBlock(db, client, stateKey, head, opts);
   const capped = opts.maxBlocks !== undefined && startBlock + opts.maxBlocks < head;
   const endBlock = capped ? startBlock + opts.maxBlocks! : head;
 
@@ -350,6 +369,6 @@ export async function indexEthereum(db: Db, opts: IndexOptions = {}): Promise<In
     eventsStored,
     votesStored,
     managedOracle: null,
-    complete: !capped,
+    complete: !capped && !fromRecent,
   };
 }

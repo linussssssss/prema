@@ -20,6 +20,12 @@ export interface IngestOptions {
   pageLimit?: number;
   /** Store the full Gamma object per market (jsonb). Costs space, aids reproducibility. */
   storeRaw?: boolean;
+  /**
+   * Crawl newest-first (id descending) and stop a pass once a whole page is
+   * pre-2024. Meant for capped demo runs: id-ascending would spend its page
+   * budget on 2020-2023 markets that the createdAt cut then discards.
+   */
+  newestFirst?: boolean;
 }
 
 export interface IngestStats {
@@ -51,7 +57,7 @@ export async function ingestPolymarketMarkets(db: Db, opts: IngestOptions = {}):
 }
 
 async function ingestPass(db: Db, pass: "closed" | "open", opts: IngestOptions, stats: IngestStats): Promise<void> {
-  const stateKey = `gamma:markets:${pass}:cursor`;
+  const stateKey = `gamma:markets:${pass}${opts.newestFirst ? ":desc" : ""}:cursor`;
   const stored = await db.select().from(ingestState).where(eq(ingestState.key, stateKey));
   const storedValue = stored[0]?.value as { cursor?: string; done?: boolean } | undefined;
   let cursor: string | undefined = storedValue?.done ? undefined : storedValue?.cursor;
@@ -68,10 +74,14 @@ async function ingestPass(db: Db, pass: "closed" | "open", opts: IngestOptions, 
       afterCursor: cursor,
       limit: opts.pageLimit ?? 100,
       closed: pass === "closed" ? true : undefined,
+      ascending: !opts.newestFirst,
     });
     pages++;
     stats.pagesFetched++;
     stats.invalid += page.invalidCount;
+
+    const allPre2024 =
+      page.markets.length > 0 && page.markets.every((m) => !m.createdAt || m.createdAt < DATASET_START);
 
     for (const market of page.markets) {
       stats.seen++;
@@ -94,6 +104,7 @@ async function ingestPass(db: Db, pass: "closed" | "open", opts: IngestOptions, 
     await setState(db, stateKey, { cursor: page.nextCursor ?? cursor ?? null, done: page.nextCursor === undefined });
 
     logger.info({ pass, pages, seen: stats.seen, upserted: stats.upserted }, "gamma page ingested");
+    if (opts.newestFirst && allPre2024) break; // descending crawl left the dataset window
     if (!page.nextCursor) break;
     cursor = page.nextCursor;
   }

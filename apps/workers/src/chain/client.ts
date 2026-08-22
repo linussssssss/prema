@@ -82,7 +82,12 @@ export async function forEachAdaptiveRange(
       span = span * 3n / 2n > maxSpan ? maxSpan : (span * 3n) / 2n;
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
-      const rangeError = /10000|10,000|range|too large|response size|limit|timeout|more than/i.test(msg);
+      // Providers disagree on how a too-big getLogs reads: Infura says
+      // "more than 10000 results", others say "block range", PublicNode
+      // returns a bare InvalidParams. Treat them all as shrinkable.
+      const rangeError = /10000|10,000|range|too large|response size|limit|timeout|more than|invalid param|request failed/i.test(
+        msg,
+      );
       if (!rangeError || span <= minSpan) throw err;
       span = span / 2n < minSpan ? minSpan : span / 2n;
       logger.warn({ label: opts.label, span: span.toString(), err: msg.slice(0, 160) }, "shrinking getLogs span");

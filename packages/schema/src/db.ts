@@ -4,6 +4,7 @@ import { drizzle as drizzlePglite } from "drizzle-orm/pglite";
 import { migrate as migratePglite } from "drizzle-orm/pglite/migrator";
 import { PGlite } from "@electric-sql/pglite";
 import postgres from "postgres";
+import { mkdirSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import path from "node:path";
 import * as tables from "./tables.ts";
@@ -29,7 +30,16 @@ const MIGRATIONS_DIR = path.join(path.dirname(fileURLToPath(import.meta.url)), "
 export async function createDb(databaseUrl: string): Promise<DbHandle> {
   if (databaseUrl.startsWith("pglite://")) {
     const target = databaseUrl.slice("pglite://".length);
-    const client = target === "memory" || target === "" ? new PGlite() : new PGlite(target);
+    let client: PGlite;
+    if (target === "memory" || target === "") {
+      client = new PGlite();
+    } else {
+      // Relative paths resolve against the invoking process's cwd; PGlite
+      // itself won't create nested directories, so do it here.
+      const dataDir = path.resolve(target);
+      mkdirSync(dataDir, { recursive: true });
+      client = new PGlite(dataDir);
+    }
     const db = drizzlePglite(client, { schema: tables }) as unknown as Db;
     return {
       db,
