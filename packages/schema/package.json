@@ -1,0 +1,23 @@
+{
+  "name": "@verdict/schema",
+  "private": true,
+  "type": "module",
+  "main": "./src/index.ts",
+  "types": "./src/index.ts",
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "db:generate": "drizzle-kit generate",
+    "db:migrate": "tsx src/cli/migrate.ts"
+  },
+  "dependencies": {
+    "@electric-sql/pglite": "^0.3.0",
+    "drizzle-orm": "^0.44.0",
+    "postgres": "^3.4.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "drizzle-kit": "^0.31.0",
+    "tsx": "^4.19.0",
+    "typescript": "^5.5.0"
+  }
+}

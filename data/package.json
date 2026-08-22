@@ -1,0 +1,21 @@
+{
+  "name": "@verdict/data",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "dataset:build": "tsx src/build.ts"
+  },
+  "dependencies": {
+    "@dsnp/parquetjs": "^1.8.0",
+    "@verdict/linter": "workspace:*",
+    "@verdict/schema": "workspace:*",
+    "@verdict/workers": "workspace:*",
+    "pino": "^9.0.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "tsx": "^4.19.0",
+    "typescript": "^5.5.0"
+  }
+}

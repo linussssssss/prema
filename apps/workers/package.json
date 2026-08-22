@@ -1,0 +1,27 @@
+{
+  "name": "@verdict/workers",
+  "private": true,
+  "type": "module",
+  "main": "./src/index.ts",
+  "types": "./src/index.ts",
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "ingest:polymarket": "tsx src/cli/ingest-polymarket.ts",
+    "ingest:chain": "tsx src/cli/ingest-chain.ts",
+    "snapshot:clob": "tsx src/cli/snapshot-clob.ts",
+    "label": "tsx src/cli/label.ts"
+  },
+  "dependencies": {
+    "@verdict/linter": "workspace:*",
+    "@verdict/schema": "workspace:*",
+    "bullmq": "^5.0.0",
+    "pino": "^9.0.0",
+    "viem": "^2.21.0",
+    "zod": "^4.0.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "tsx": "^4.19.0",
+    "typescript": "^5.5.0"
+  }
+}
