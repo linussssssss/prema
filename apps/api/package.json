@@ -4,10 +4,11 @@
   "type": "module",
   "scripts": {
     "typecheck": "tsc --noEmit",
-    "dev": "tsx src/server.ts"
+    "dev": "tsx src/main.ts"
   },
   "dependencies": {
     "@verdict/schema": "workspace:*",
+    "drizzle-orm": "^0.44.7",
     "fastify": "^5.0.0"
   },
   "devDependencies": {

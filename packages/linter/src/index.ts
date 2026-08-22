@@ -169,7 +169,6 @@ const URL_RE = /\bhttps?:\/\/\S+|\b[a-z0-9-]+(?:\.[a-z0-9-]+)+\/\S*/i;
 const DOMAIN_RE = /\b[a-z0-9-]+\.(?:com|org|net|gov|edu|io|xyz|co)\b/i;
 
 function rVagueSource(text: string, ctx: LintContext): LintHit[] {
-  const lower = text.toLowerCase();
   const sourceField = (ctx.resolutionSource ?? "").trim();
   const cueSpans = wordlists.sourceClauseCues.flatMap((cue) => findAll(text, cue));
   if (cueSpans.length === 0) return [];

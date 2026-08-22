@@ -29,6 +29,9 @@ importers:
       '@verdict/schema':
         specifier: workspace:*
         version: link:../../packages/schema
+      drizzle-orm:
+        specifier: ^0.44.7
+        version: 0.44.7(@electric-sql/pglite@0.3.16)(postgres@3.4.9)
       fastify:
         specifier: ^5.0.0
         version: 5.12.1
