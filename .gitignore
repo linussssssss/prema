@@ -1,0 +1,29 @@
+# deps / build
+node_modules/
+dist/
+*.tsbuildinfo
+coverage/
+
+# secrets
+.env
+.env.*
+!.env.example
+
+# dataset outputs (rebuildable via `pnpm dataset:build`)
+data/exports/
+data/raw/
+*.pglite/
+
+# python
+eval/.venv/
+__pycache__/
+*.pyc
+eval/.ipynb_checkpoints/
+
+# foundry
+contracts/out/
+contracts/cache/
+contracts/broadcast/
+
+# misc
+.DS_Store

@@ -1,0 +1,26 @@
+{
+  "name": "verdict",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=22"
+  },
+  "packageManager": "pnpm@10.34.5",
+  "scripts": {
+    "lint": "eslint .",
+    "typecheck": "pnpm -r --no-bail run typecheck",
+    "test": "vitest run",
+    "db:migrate": "pnpm --filter @verdict/schema run db:migrate",
+    "db:generate": "pnpm --filter @verdict/schema run db:generate",
+    "dataset:build": "pnpm --filter @verdict/data run dataset:build",
+    "stack:up": "docker compose up -d",
+    "stack:down": "docker compose down"
+  },
+  "devDependencies": {
+    "@eslint/js": "^9.0.0",
+    "eslint": "^9.0.0",
+    "typescript": "^5.5.0",
+    "typescript-eslint": "^8.0.0",
+    "vitest": "^3.0.0"
+  }
+}
