@@ -7,7 +7,8 @@ you go, not at the end.
 **Start every session by reading `STATUS.md`** (full project state, verified
 external facts, environment quirks) **and `TODO.md`** (prioritized backlog
 with per-item context). Keep both current: update STATUS.md when reality
-changes, check items off in TODO.md as they land.
+changes, check items off in TODO.md as they land. `MARKETING.md` is the
+source of truth for go-to-market, positioning, and commercial sequencing.
 
 ## Non-negotiables (company-defining; never trade these away)
 
