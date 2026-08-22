@@ -4,6 +4,11 @@
 is the ADR log for technical decisions — add an entry when you make one, as
 you go, not at the end.
 
+**Start every session by reading `STATUS.md`** (full project state, verified
+external facts, environment quirks) **and `TODO.md`** (prioritized backlog
+with per-item context). Keep both current: update STATUS.md when reality
+changes, check items off in TODO.md as they land.
+
 ## Non-negotiables (company-defining; never trade these away)
 
 - We never operate a market, take positions, hold customer funds/keys, or
