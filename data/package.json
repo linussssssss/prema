@@ -11,6 +11,7 @@
     "@verdict/linter": "workspace:*",
     "@verdict/schema": "workspace:*",
     "@verdict/workers": "workspace:*",
+    "drizzle-orm": "^0.44.7",
     "pino": "^9.0.0"
   },
   "devDependencies": {
