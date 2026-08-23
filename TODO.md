@@ -98,6 +98,16 @@ worked, so `resolveManagedOracle()` silently returned null.
       disputed markets that press reporting (WSJ, via `moo-research.md`)
       attributes to 2026 — external corroboration that the pipeline is
       measuring the same thing the outside world sees.
+- [x] **2024 adapter coverage — CHECKED 2026-08-23, complete.** The website
+      session noted UMA publishes a ~1.3% pre-update dispute rate against our
+      2.90% 2024 figure, and asked whether an unindexed 2024-era adapter had
+      shortened our `ProposePrice` denominator. Sampled 24 windows across the
+      2024 sweep's block span, unfiltered by requester: **100% of both
+      ProposePrice and DisputePrice requesters are adapters we index**
+      (`ctf_adapter_v2`, `neg_risk_adapter`), zero unknown addresses. The
+      denominator is not short and the 2.90% baseline stands; the gap to UMA's
+      figure is a population difference (their oracle serves more than
+      Polymarket), not a measurement error.
 - [x] **OOReporter blind spot — CHECKED 2026-08-23, not present.** `moo-research.md`
       finding 6 warned that a newer Polymarket request path (OOReporter,
       audited Aug 2026) could route requests through a different `requester`,
@@ -126,6 +136,44 @@ worked, so `resolveManagedOracle()` silently returned null.
 - [ ] **Plan for 0.1% class imbalance.** ~3,000 positives against ~2.6M
       markets. Evaluate with precision/recall and calibration, never
       accuracy; consider case-control sampling for training.
+
+## P0 — linter v1 quality, measured on the full corpus (2026-08-23)
+
+The linter has now run over all **2,615,958 rules versions → 5,183,533 hits**
+(0 skipped, exit 0).
+These are base rates, not lift — lift needs the labels, which need the chain
+backfill. But three things are already actionable and two are uncomfortable.
+
+- [ ] **`outcomes-not-exhaustive` fires ZERO times in 2.6M versions.** Not a
+      data bug: `markets.outcomes` is stored as a proper JSON array
+      (`["$10", "$20"]`, 2,615,958 rows), so the rule is fed what it expects and
+      still never matches. It passes its unit test and does nothing on reality.
+      Either fix or retire it — as it stands it is a scored rule contributing
+      nothing.
+- [ ] **Two rules dominate and carry little information.** Share of corpus
+      flagged: `hedge-words` **57.3%** (1,498,344), `no-na-condition` **40.9%**
+      (1,070,029), `vague-source` 9.5%, `deadline-no-timezone` 1.0%,
+      `status-verb-gap` 0.8%, `occurrence-vs-reporting` **0.1%** (1,974). Only
+      281,557 versions (10.8%) have any hit beyond the top two. A rule firing on half the corpus cannot do much
+      ranking work against a ~0.1% contested base rate, so a v1 score would be
+      driven by its two least discriminating inputs. Confirm with lift once
+      labels exist, but plan for reweighting or dropping them.
+- [ ] **The linter MISSED the flagship dispute's actual failure mode.** The
+      June 2026 Strategy market ("MicroStrategy sells any Bitcoin by May 31,
+      2026?", listed 2026-05-05) turned on sale date vs disclosure date — an
+      8-K filed June 1 disclosed 32 BTC sold May 26–31. That is
+      `occurrence-vs-reporting` exactly, the rule predates the market, and it
+      **did not fire**. The market was flagged (`hedge-words`,
+      `no-na-condition`, `vague-source`) so it would appear on a watchlist, but
+      not for the right reason. This is the single best ground-truth case we
+      have (high-profile, expensive, independently adjudicated by a DVM vote) —
+      make it a linter fixture and treat it as a regression target for v2.
+      Credit: the case was identified by the website session.
+- [ ] **Reconcile the Strategy market's volume.** Our Gamma figure is
+      **~$375.8M**; press reporting says $60M–$150M. One of them is wrong, or
+      `volumeNum` is not what we assume (both sides counted? shares not USD?).
+      This matters beyond one market: `volume_usd` now drives `volume_decile`,
+      and every stakes-conditioned number rests on it.
 
 ## P1 — Phase 0 hardening (before anything is shown publicly)
 
