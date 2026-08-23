@@ -45,14 +45,34 @@ public-name tags (cited in config.ts).
 pnpm --filter @verdict/workers run ingest:chain -- --reset-cursor --chain polygon
 DATASET_SKIP_GAMMA=1 pnpm dataset:build      # chain + linter + labels + export
 ```
-- **Credit reality:** a full Polygon sweep ≈ ~8M Infura credits ≈ ~3 free-tier
-  days (3M/day, 255/getLogs). It is resumable across days at no extra cost.
+- **Credit reality — revised 2026-08-23, the ~8M/3-day figure was pessimistic.**
+  That estimate applied dense-region chunk sizes to all 40.7M blocks. Two
+  measurements say density varies ~400x across the sweep: the Aug-2026 probe
+  saw 1.275 logs/block, while the dead 2024 sweep saw 0.0031 (31,573 events
+  over 10.15M blocks). Modelling growth between them puts the whole sweep at
+  **~8–13M logs ≈ ~1.3M Infura credits**, i.e. plausibly **inside a single
+  free day**. Treat as an estimate with ~5x error bars either way — but note
+  it is bounded: 3M credits/day is a *ceiling*, so the worst case is more
+  days, never a bill.
+- **The real constraint is data, not credits.** ~10M logs at the measured
+  ~1.3 KB/log is **~10–17 GB** of JSON to pull, parse and insert. Expect a
+  few hours of wall-clock whatever the provider, and keep the machine awake
+  (the exit-127 cause).
+- **Measure instead of guessing:** watch the Infura dashboard for the first
+  hour of the real run. Credits burned per 1M blocks there settles this
+  properly, and the run is resumable, so there is no cost to finding out.
 - **Ways to fit sooner (pick one, ask before spending):**
   (a) spread over days — free, default, just re-run daily;
   (b) fewer-getLogs optimization — combine the 3 OO event calls into 1 via
       manual topics (~40% fewer calls); dev effort + needs testing before trust;
-  (c) one paid Alchemy month (unlimited getLogs ranges) — hours not days;
-      a spend decision, needs founder OK.
+  (c) Alchemy Pay As You Go — **no longer "one paid month"**: Growth/Scale
+      became usage-based on 2025-02-01. $0.45/1M CU, no platform fee, no
+      documented minimum, and a dashboard usage cap. getLogs = 60 CU with
+      *unlimited* block ranges (150 MB responses) vs Infura's 10k-log cap,
+      so ~5x fewer, larger calls. At this job's size that is **cents — on the
+      order of $0.05, low single-digit dollars even if the estimate is 10x
+      off**. Cheap insurance if the credit ceiling turns out to bind; it does
+      not remove the GB-transfer floor, so do not expect hours-vs-days.
 
 **0.4 Finish:** linter (2.6M rules versions already present) → labels → export
 → REPORT.md.
