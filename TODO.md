@@ -20,13 +20,21 @@ ADRs as you go; `pnpm lint && pnpm typecheck && pnpm test` before "done".
 - [x] **GitHub push** — `origin` = github.com/linussssssss/prema, `main`
       pushed, CI armed.
 
-## P0 — first full backfill run (IN PROGRESS 2026-08-23)
+## P0 — first full backfill run (RE-SCAN PENDING FOUNDER TRIGGER 2026-08-23)
 
-- [~] **Full build running** on Postgres, uncapped. Gamma closed-pass alone
-      exceeded 400k markets (corpus is ~all 2024+; ~8.7k/page-run skipped as
-      pre-2024). Polygon 40M-block sweep + Ethereum + linter (400k+ versions)
-      + labels + export still to come — expect a multi-hour run. Resumable
-      from `ingest_state` if interrupted. When it finishes, run the validator
+- [x] **Gamma pass complete** — 2,615,958 markets + 2.6M rules versions in
+      Postgres. Keep them: re-run the chain phase with `DATASET_SKIP_GAMMA=1`.
+- [x] **V4 adapters + backfill hardening landed** (ADR-0012, ADR-0013): deep
+      sweeps now use the Infura-only transport (no Alchemy thrash), and
+      `ingest:chain --reset-cursor` clears a poisoned cursor through an
+      audited code path.
+- [ ] **Polygon re-scan (FOUNDER-TRIGGERED — credit-sensitive)**. The first
+      sweep died at exit 127 (~block 61.9M, external process death), and that
+      checkpoint predates the V4 adapters, so it must be reset rather than
+      resumed. ~8M Infura credits ≈ ~3 free-tier days; resumable across days
+      at no extra cost. Prevent machine sleep during the run. Procedure and
+      the three ways to fit it: `RECOVERY.md` §0.3.
+- [ ] **Then** linter → labels → export → REPORT.md, and run the validator
       (next item) BEFORE trusting any number.
 - [ ] **Run `pnpm --filter @verdict/data run validate`** (new this session):
       prints the dispute sanity gate, the MOOv2 answer, the questionId join

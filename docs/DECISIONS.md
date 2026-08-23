@@ -194,3 +194,34 @@ the docs were stale, which is exactly why on-chain `resolved_by` is the
 ground truth and the linter/verify step caught it).
 **Lesson:** verify contract sets against on-chain reality (resolved_by), not
 documentation — docs lag deployments.
+
+---
+
+## ADR-0013 — Deep backfill runs on the primary transport only (2026-08-23)
+
+**Decision:** `makeClient(chain, { primaryOnly: true })` builds a client from
+the primary (Infura) URL alone, with no viem `fallback()` transport, and both
+`indexPolygon` and `indexEthereum` use it. The fallback chain stays the default
+for every other caller — live head-tailing works in small ranges the secondary
+can serve. Alongside it, `resetChainCursor(db, chain)` (surfaced as
+`ingest-chain --reset-cursor`) clears a `chain:<chain>:lastBlock` row through
+an audited code path instead of a hand DB edit.
+**Alternatives:** keep `fallback()` everywhere — rejected: the first full
+backfill's logs show repeated thrash against Alchemy ("JSON is not a valid
+request object"), because Alchemy's free tier caps `eth_getLogs` at ~10 blocks
+(ADR-0002) and simply cannot answer the deep ranges the sweep issues. Every
+failover was a guaranteed-failed request plus retries — wasted wall-clock and
+credits, and noise that hid real range errors. Also considered: teaching
+`forEachAdaptiveRange` to detect and quarantine an unusable provider
+(more moving parts than declaring transport intent at the call site).
+**Why the cursor reset is code, not SQL:** the stored Polygon checkpoint
+(~block 61.9M) predates the V4 adapters (ADR-0012), so resuming from it would
+silently skip all V4 history below it — a full re-scan is required. Events
+dedupe on `(chain, tx_hash, log_index)`, so re-scanning seen blocks is a safe
+no-op. `ingest_state` is operational bookkeeping and may be deleted (unlike
+decision-relevant rows), but the deletion appends to `audit_log` so the reset
+is on the record.
+**Not done here:** combining the three OO `getLogs` calls into one via manual
+topic encoding (~40% fewer calls). It needs hand-built topic arrays and mainnet
+verification; a wrong encoding would silently drop events. Tracked as
+RECOVERY.md §0.3(b).

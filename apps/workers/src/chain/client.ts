@@ -37,12 +37,18 @@ export function toRpcUrl(value: string, slot: "primary" | "fallback", chain: Cha
     : `https://eth-mainnet.g.alchemy.com/v2/${value}`;
 }
 
-export function rpcUrlsFor(chain: ChainName): string[] {
+/** The primary (Infura, per ADR-0002) URL for a chain, or null if unset. */
+export function primaryRpcUrlFor(chain: ChainName): string | null {
   const primary = chain === "polygon" ? process.env.POLYGON_RPC_URL : process.env.ETHEREUM_RPC_URL;
+  return primary && primary.length > 0 ? toRpcUrl(primary, "primary", chain) : null;
+}
+
+export function rpcUrlsFor(chain: ChainName): string[] {
   const secondary =
     chain === "polygon" ? process.env.POLYGON_RPC_URL_FALLBACK : process.env.ETHEREUM_RPC_URL_FALLBACK;
   const urls: string[] = [];
-  if (primary && primary.length > 0) urls.push(toRpcUrl(primary, "primary", chain));
+  const primary = primaryRpcUrlFor(chain);
+  if (primary) urls.push(primary);
   if (secondary && secondary.length > 0) urls.push(toRpcUrl(secondary, "fallback", chain));
   if (urls.length === 0) {
     logger.warn({ chain }, "no RPC URL configured; using keyless PublicNode fallback (recent blocks only)");
@@ -51,8 +57,29 @@ export function rpcUrlsFor(chain: ChainName): string[] {
   return urls;
 }
 
-export function makeClient(chain: ChainName): PublicClient {
-  const transports = rpcUrlsFor(chain).map((url) => http(url, { retryCount: 3, retryDelay: 500 }));
+export interface ClientOptions {
+  /**
+   * Build from the primary (Infura) URL alone — no `fallback()` transport.
+   * For the deep historical sweep: Alchemy free caps `eth_getLogs` at ~10
+   * blocks, so failing over to it mid-backfill can't serve the range and only
+   * burns retries and credits (ADR-0013). Live head-tailing, which uses small
+   * ranges the fallback *can* serve, keeps the default.
+   */
+  primaryOnly?: boolean | undefined;
+}
+
+export function makeClient(chain: ChainName, opts: ClientOptions = {}): PublicClient {
+  let urls = rpcUrlsFor(chain);
+  if (opts.primaryOnly) {
+    const primary = primaryRpcUrlFor(chain);
+    if (primary) urls = [primary];
+    else
+      logger.warn(
+        { chain },
+        "primaryOnly requested but no primary RPC URL configured; deep getLogs ranges may not be servable",
+      );
+  }
+  const transports = urls.map((url) => http(url, { retryCount: 3, retryDelay: 500 }));
   return createPublicClient({
     chain: CHAINS[chain],
     transport: transports.length > 1 ? fallback(transports) : transports[0]!,

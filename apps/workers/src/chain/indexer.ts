@@ -95,6 +95,45 @@ export async function resolveManagedOracle(client: PublicClient): Promise<string
   return managed ?? null;
 }
 
+/** Single source of truth for the cursor key, so a reset and an index run can
+ *  never disagree about which row they mean. */
+export function chainStateKey(chain: ChainName): string {
+  return `chain:${chain}:lastBlock`;
+}
+
+export interface CursorReset {
+  chain: ChainName;
+  key: string;
+  /** The cursor that was cleared, or null if none was stored. */
+  previousBlock: string | null;
+}
+
+/**
+ * Clear a chain's stored `lastBlock` cursor so the next run restarts from the
+ * 2024 boundary. `ingest_state` is operational bookkeeping, not
+ * decision-relevant, so deleting here is allowed (CLAUDE.md) — but it must go
+ * through this code path rather than a hand DB edit, and it appends to the
+ * audit log so the reset is on the record.
+ *
+ * Used to discard the Polygon checkpoint that predates the V4 adapters
+ * (ADR-0012): resuming from it would skip all V4 history below it. Re-scanning
+ * already-seen blocks is a safe no-op — events dedupe on
+ * `(chain, tx_hash, log_index)`.
+ */
+export async function resetChainCursor(db: Db, chain: ChainName): Promise<CursorReset> {
+  const key = chainStateKey(chain);
+  const previous = await getStateBlock(db, key);
+  await db.delete(ingestState).where(eq(ingestState.key, key));
+  await appendAudit(db, {
+    actor: ACTOR,
+    action: "index.cursor.reset",
+    entity: "chain",
+    entityId: chain,
+    payload: { key, previousBlock: previous?.toString() ?? null },
+  });
+  return { chain, key, previousBlock: previous?.toString() ?? null };
+}
+
 async function getStateBlock(db: Db, key: string): Promise<bigint | null> {
   const rows = await db.select().from(ingestState).where(eq(ingestState.key, key));
   const value = rows[0]?.value as { lastBlock?: string } | undefined;
@@ -140,12 +179,14 @@ async function storeEvents(db: Db, rows: PendingEvent[]): Promise<number> {
 }
 
 export async function indexPolygon(db: Db, opts: IndexOptions = {}): Promise<IndexStats> {
-  const client = makeClient("polygon");
+  // Deep sweep: primary (Infura) transport only — the free-tier fallback can't
+  // serve these getLogs ranges, so failing over to it just burns retries (ADR-0013).
+  const client = makeClient("polygon", { primaryOnly: true });
   const managedOracle = await resolveManagedOracle(client);
   const ooAddresses = [POLYGON_CONTRACTS.oov2, ...(managedOracle ? [managedOracle] : [])] as Hex[];
   logger.info({ managedOracle }, managedOracle ? "managed oracle resolved on-chain" : "no managed oracle found; indexing OOv2 only");
 
-  const stateKey = "chain:polygon:lastBlock";
+  const stateKey = chainStateKey("polygon");
   const head = (await client.getBlock({ blockTag: "latest" })).number - CONFIRMATIONS.polygon;
   const { startBlock, fromRecent } = await resolveStartBlock(db, client, stateKey, head, opts);
   const capped = opts.maxBlocks !== undefined && startBlock + opts.maxBlocks < head;
@@ -266,8 +307,8 @@ async function resolveStartBlock(
 }
 
 export async function indexEthereum(db: Db, opts: IndexOptions = {}): Promise<IndexStats> {
-  const client = makeClient("ethereum");
-  const stateKey = "chain:ethereum:lastBlock";
+  const client = makeClient("ethereum", { primaryOnly: true }); // deep sweep; see indexPolygon
+  const stateKey = chainStateKey("ethereum");
   const head = (await client.getBlock({ blockTag: "latest" })).number - CONFIRMATIONS.ethereum;
   const { startBlock, fromRecent } = await resolveStartBlock(db, client, stateKey, head, opts);
   const capped = opts.maxBlocks !== undefined && startBlock + opts.maxBlocks < head;

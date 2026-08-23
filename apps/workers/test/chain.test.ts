@@ -1,6 +1,9 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { eq } from "drizzle-orm";
 import { keccak256, stringToHex } from "viem";
-import { forEachAdaptiveRange } from "../src/chain/client.ts";
+import { auditLog, createDb, ingestState, verifyAuditChain, type DbHandle } from "@verdict/schema";
+import { forEachAdaptiveRange, makeClient } from "../src/chain/client.ts";
+import { chainStateKey, resetChainCursor } from "../src/chain/indexer.ts";
 import { oracleLabelFor, POLYGON_CONTRACTS } from "../src/chain/config.ts";
 
 describe("forEachAdaptiveRange", () => {
@@ -56,5 +59,73 @@ describe("chain config", () => {
     // Sanity pin: the join rule disputes→markets relies on this equality.
     const ancillary = stringToHex("q: title: Will it rain tomorrow?");
     expect(keccak256(ancillary)).toMatch(/^0x[0-9a-f]{64}$/);
+  });
+});
+
+describe("makeClient transport selection (ADR-0013)", () => {
+  const saved = { primary: process.env.POLYGON_RPC_URL, fallback: process.env.POLYGON_RPC_URL_FALLBACK };
+
+  beforeEach(() => {
+    process.env.POLYGON_RPC_URL = "https://primary.example/rpc";
+    process.env.POLYGON_RPC_URL_FALLBACK = "https://secondary.example/rpc";
+  });
+
+  afterEach(() => {
+    if (saved.primary === undefined) delete process.env.POLYGON_RPC_URL;
+    else process.env.POLYGON_RPC_URL = saved.primary;
+    if (saved.fallback === undefined) delete process.env.POLYGON_RPC_URL_FALLBACK;
+    else process.env.POLYGON_RPC_URL_FALLBACK = saved.fallback;
+  });
+
+  it("uses a fallback transport by default (live head-tailing)", () => {
+    expect(makeClient("polygon").transport.type).toBe("fallback");
+  });
+
+  it("uses the primary URL alone when primaryOnly (deep backfill)", () => {
+    // Alchemy free caps getLogs at ~10 blocks: failing over to it mid-sweep
+    // can't serve the range, it only burns retries.
+    const transport = makeClient("polygon", { primaryOnly: true }).transport;
+    expect(transport.type).toBe("http");
+    expect(transport.url).toBe("https://primary.example/rpc");
+  });
+
+  it("still builds a client when primaryOnly is asked for without a primary key", () => {
+    delete process.env.POLYGON_RPC_URL;
+    const transport = makeClient("polygon", { primaryOnly: true }).transport;
+    expect(transport.type).toBe("http");
+    expect(transport.url).toBe("https://secondary.example/rpc");
+  });
+});
+
+describe("resetChainCursor (PGlite)", () => {
+  let handle: DbHandle;
+
+  beforeEach(async () => {
+    handle = await createDb("pglite://memory");
+    await handle.migrate();
+  });
+
+  afterEach(async () => {
+    await handle.close();
+  });
+
+  it("deletes the stored cursor, reports it, and records the reset in the audit log", async () => {
+    const key = chainStateKey("polygon");
+    expect(key).toBe("chain:polygon:lastBlock");
+    await handle.db.insert(ingestState).values({ key, value: { lastBlock: "61900000" }, updatedAt: new Date() });
+
+    const result = await resetChainCursor(handle.db, "polygon");
+
+    expect(result.previousBlock).toBe("61900000");
+    expect(await handle.db.select().from(ingestState).where(eq(ingestState.key, key))).toHaveLength(0);
+    const audit = await handle.db.select().from(auditLog).where(eq(auditLog.action, "index.cursor.reset"));
+    expect(audit).toHaveLength(1);
+    expect(await verifyAuditChain(handle.db)).toBeNull(); // hash chain intact
+  });
+
+  it("is a no-op when no cursor is stored", async () => {
+    const result = await resetChainCursor(handle.db, "ethereum");
+    expect(result.previousBlock).toBeNull();
+    expect(result.key).toBe("chain:ethereum:lastBlock");
   });
 });

@@ -23,8 +23,8 @@ jobs — the founder triggers re-scans (Infura free = 3M credits/day).
 
 ## Phase 0 — V4 fix + backfill recovery (NOW)
 
-**0.1 Code — execute `PROMPT-v4-fix.md` in a fresh, small-context session**
-(safe, no launch):
+**0.1 Code — DONE 2026-08-23** (`PROMPT-v4-fix.md`; ADR-0013, quality gate
+green, one-call Infura sanity check passed):
 - Backfill uses the **Infura primary transport only** (no Alchemy fallback for
   the deep sweep) — stops the thrash and wasted retries. Fallback stays for
   live head-tailing (small ranges). [ADR-0013]
