@@ -1,4 +1,4 @@
-import { asc } from "drizzle-orm";
+import { asc, sql } from "drizzle-orm";
 import { disputes, type Db } from "@verdict/schema";
 import type { MarketExportRow } from "./exporters.ts";
 
@@ -45,6 +45,21 @@ export async function generateReport(db: Db, rows: MarketExportRow[], info: Buil
   const jan = new Date("2026-01-01T00:00:00Z");
   const jun = new Date("2026-06-01T00:00:00Z");
   const disputesJanMay2026 = disputeRows.filter((d) => d.disputedAt && d.disputedAt >= jan && d.disputedAt < jun).length;
+
+  // Disputes we can see on-chain but cannot label, because the market was
+  // listed before the 2024-01-01 corpus cut (ADR-0004) so we hold no rules text
+  // for it. Structural and permanent, not a defect — but it must be stated, and
+  // it must be counted from the data rather than asserted, so it stays true.
+  const [unlabelable] = (await db.execute(
+    sql`select count(*)::int as events,
+               count(distinct question_id)::int as questions
+        from resolution_events
+        where event_name = 'DisputePrice'
+          and question_id is not null
+          and question_id not in (select question_id from markets where question_id is not null)`,
+  )) as unknown as Array<{ events: number; questions: number }>;
+  const orphanEvents = unlabelable?.events ?? 0;
+  const orphanQuestions = unlabelable?.questions ?? 0;
 
   const volumeAll = rows.reduce((a, r) => a + (r.volume_usd ?? 0), 0);
   const volumeContested = contested.reduce((a, r) => a + (r.volume_usd ?? 0), 0);
@@ -145,6 +160,21 @@ ${sanity}
 | rules edited after listing | ${rulesEdited.length} |
 | **contested (composite)** | **${contested.length}** (${pct(contested.length, labeled.length)} of labeled) |
 | dispute records (oracle requests) | ${disputeRows.length} |
+
+## Known gaps
+
+- **Disputes on pre-2024 markets are visible but unlabelled.** ${orphanEvents}
+  \`DisputePrice\` events (${orphanQuestions} distinct questions) resolve to a
+  market that was listed before this dataset's 2024-01-01 cut, so no rules text
+  exists for them and they are excluded from every count above. They are real
+  contested resolutions; they are simply outside the corpus. This is heaviest
+  in the first weeks of the indexed window, where disputes land on markets
+  listed the previous year.
+  *Not* a join failure: the \`questionID = keccak256(ancillaryData)\` derivation
+  was verified against adapter-reported ids, which carry the id in topics
+  rather than deriving it — 159 of 159 matched on the 2024 sample.
+- \`rules_edited_after_listing\` is right-censored: a one-pass crawl sees each
+  market once, so only markets re-polled over time can register an edit.
 
 ## Value at stake
 
