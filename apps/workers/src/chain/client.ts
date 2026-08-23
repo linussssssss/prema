@@ -57,6 +57,18 @@ export function rpcUrlsFor(chain: ChainName): string[] {
   return urls;
 }
 
+/**
+ * Response cap for the deep sweep. viem defaults `maxResponseBodySize` to
+ * 10 MiB, and the 2026-08-23 probe showed that biting *before* Infura's own
+ * 10k-log rule: 6,250-block chunks overflowed the body cap while carrying only
+ * ~8k logs, so the sweep kept halving for a client-side reason rather than a
+ * provider one, and never used the range ADR-0002 actually bought us. At the
+ * ~1.3 KB/log measured there, a full 10k-log response is ~13 MiB; 64 MiB puts
+ * the provider's contract back in charge with generous headroom while still
+ * bounding how much a single response can allocate.
+ */
+export const BACKFILL_MAX_RESPONSE_BYTES = 64 * 1024 * 1024;
+
 export interface ClientOptions {
   /**
    * Build from the primary (Infura) URL alone — no `fallback()` transport.
@@ -66,6 +78,8 @@ export interface ClientOptions {
    * ranges the fallback *can* serve, keeps the default.
    */
   primaryOnly?: boolean | undefined;
+  /** Override viem's 10 MiB response cap; see BACKFILL_MAX_RESPONSE_BYTES. */
+  maxResponseBodySize?: number | false | undefined;
 }
 
 export function makeClient(chain: ChainName, opts: ClientOptions = {}): PublicClient {
@@ -79,7 +93,13 @@ export function makeClient(chain: ChainName, opts: ClientOptions = {}): PublicCl
         "primaryOnly requested but no primary RPC URL configured; deep getLogs ranges may not be servable",
       );
   }
-  const transports = urls.map((url) => http(url, { retryCount: 3, retryDelay: 500 }));
+  const transports = urls.map((url) =>
+    http(url, {
+      retryCount: 3,
+      retryDelay: 500,
+      ...(opts.maxResponseBodySize !== undefined ? { maxResponseBodySize: opts.maxResponseBodySize } : {}),
+    }),
+  );
   return createPublicClient({
     chain: CHAINS[chain],
     transport: transports.length > 1 ? fallback(transports) : transports[0]!,
@@ -110,23 +130,52 @@ export interface LogRange {
 /**
  * Run `fetch` over [fromBlock, toBlock] in adaptive chunks: start at
  * `initialSpan`, halve on provider range/size errors (Infura's 10k-log cap and
- * friends), grow 1.5x after successes. Provider-agnostic by design (ADR-0002).
+ * friends), grow after successes. Provider-agnostic by design (ADR-0002).
+ *
+ * Growth is capped by a remembered `ceiling` — the smallest span seen to
+ * overflow here. Without it the loop is multiplicative in both directions:
+ * every success grows 1.5x until the next failure, so it re-probes a span it
+ * already knows is too big roughly every third chunk, and each of those probes
+ * is a paid-for request that cannot succeed. The ceiling relaxes by 25% after
+ * a run of `relaxAfter` clean chunks so the sweep can still widen when it
+ * crosses into quieter block ranges (event density varies by orders of
+ * magnitude across the backfill). ADR-0015.
  */
 export async function forEachAdaptiveRange(
   range: LogRange,
-  opts: { initialSpan: bigint; minSpan?: bigint; maxSpan?: bigint; label?: string },
+  opts: {
+    initialSpan: bigint;
+    minSpan?: bigint;
+    maxSpan?: bigint;
+    label?: string;
+    /** Clean chunks before the learned ceiling relaxes upward. */
+    relaxAfter?: number;
+  },
   fetchChunk: (chunk: LogRange) => Promise<void>,
 ): Promise<void> {
   const minSpan = opts.minSpan ?? 128n;
   const maxSpan = opts.maxSpan ?? opts.initialSpan * 8n;
+  const relaxAfter = opts.relaxAfter ?? 16;
   let span = opts.initialSpan;
+  let ceiling: bigint | null = null;
+  let streak = 0;
   let from = range.fromBlock;
   while (from <= range.toBlock) {
     const to = from + span - 1n > range.toBlock ? range.toBlock : from + span - 1n;
     try {
       await fetchChunk({ fromBlock: from, toBlock: to });
       from = to + 1n;
-      span = span * 3n / 2n > maxSpan ? maxSpan : (span * 3n) / 2n;
+      streak += 1;
+      if (ceiling !== null && streak >= relaxAfter) {
+        ceiling = (ceiling * 5n) / 4n;
+        streak = 0;
+      }
+      let next = (span * 3n) / 2n;
+      // Stay a margin below what already failed rather than rediscovering it.
+      if (ceiling !== null && next > (ceiling * 7n) / 8n) next = (ceiling * 7n) / 8n;
+      if (next > maxSpan) next = maxSpan;
+      if (next < minSpan) next = minSpan;
+      span = next;
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       // Providers disagree on how a too-big getLogs reads: Infura says
@@ -136,6 +185,8 @@ export async function forEachAdaptiveRange(
         msg,
       );
       if (!rangeError || span <= minSpan) throw err;
+      ceiling = span;
+      streak = 0;
       span = span / 2n < minSpan ? minSpan : span / 2n;
       logger.warn({ label: opts.label, span: span.toString(), err: msg.slice(0, 160) }, "shrinking getLogs span");
     }

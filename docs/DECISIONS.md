@@ -269,3 +269,47 @@ on-chain reality, not docs". The sharper version: a config value can be wrong
 in a way that only breaks *one* of its uses. `resolveManagedOracle()` degraded
 to `null` on error rather than failing loudly, so a silent warning was the only
 symptom. Prefer loud failure for facts the dataset's correctness depends on.
+
+---
+
+## ADR-0015 — Backfill sweep tuning: body cap, span floor, learned ceiling (2026-08-23)
+
+**Context:** instrumenting the 2026-08-23 probe showed the sweep was paying for
+requests that could not succeed. Three separate causes, all measured, none of
+them the provider being stingy.
+
+**1. viem's response cap was binding before Infura's.** `http()` defaults
+`maxResponseBodySize` to 10 MiB. At the measured ~1.3 KB/log, that caps a chunk
+at ~8k logs — *below* Infura's 10k-log allowance (ADR-0002), so the sweep kept
+halving for a client-side reason and never used the range we chose Infura for.
+Backfill clients now pass `BACKFILL_MAX_RESPONSE_BYTES` (64 MiB), which puts
+the provider's contract back in charge with headroom over a ~13 MiB full
+10k-log response, while still bounding a single response's allocation.
+*Alternative:* `maxResponseBodySize: false` — rejected, unbounded allocation on
+a pathological response is not worth the marginal range.
+
+**2. `INITIAL_SPAN` was ~12x too wide for Polygon.** 50,000 blocks burned four
+failed halvings (50k→25k→12.5k→6.25k) before the first success at ~3k. Polygon
+opens at 4,000 now; Ethereum's VotingV2 traffic is genuinely sparse and still
+opens at 50,000. `MAX_SPAN` is now passed explicitly (400,000, unchanged in
+effect) because `forEachAdaptiveRange` otherwise derives it as `initialSpan*8`
+— lowering the floor would silently have cut the ceiling to 32,000 and made
+the sparse 2024 ranges *more* expensive, which is the opposite of the goal.
+
+**3. Growth was multiplicative in both directions, so failures repeated.**
+Every success grew the span 1.5x until the next failure, meaning the loop
+rediscovered a known-bad span roughly every third chunk. `forEachAdaptiveRange`
+now remembers `ceiling` (the smallest span seen to overflow) and caps growth at
+`ceiling * 7/8`, relaxing the ceiling 25% after 16 clean chunks so the sweep
+still widens when it crosses into quieter ranges. Simulated against a fixed
+capacity: ~1 failed probe per 9 chunks, down from ~1 per 3, with identical
+coverage. *Alternative:* a hard learned ceiling with no relaxation — rejected,
+event density varies by orders of magnitude across the backfill and a ceiling
+learned in a dense range would pin the sweep narrow for the sparse 90%.
+
+**Not done, still:** combining the three OO `getLogs` into one via manual topic
+encoding (RECOVERY.md §0.3(b)). Unchanged reasoning — a wrong encoding silently
+drops events, and it needs mainnet verification before it can be trusted.
+**Honesty note:** these are estimates from one 20k-block probe in the densest
+part of the chain. The real sweep spans 40M blocks of wildly varying density;
+treat the projected savings as a direction, not a number.

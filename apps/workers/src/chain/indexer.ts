@@ -14,6 +14,7 @@ import {
   votingV2Abi,
 } from "./config.ts";
 import {
+  BACKFILL_MAX_RESPONSE_BYTES,
   chunkTimeInterpolator,
   findBlockByTimestamp,
   forEachAdaptiveRange,
@@ -23,7 +24,19 @@ import {
 
 const ACTOR = "ingest-chain";
 const CONFIRMATIONS: Record<ChainName, bigint> = { polygon: 300n, ethereum: 32n };
-const INITIAL_SPAN: Record<ChainName, bigint> = { polygon: 50_000n, ethereum: 50_000n };
+/**
+ * Where the adaptive sweep starts probing. Polygon's Polymarket traffic makes
+ * 50,000 blocks hopeless in the dense recent ranges — the 2026-08-23 probe
+ * burned four failed halvings (50k→25k→12.5k→6.25k) before its first success
+ * at ~3k, and every one of those was a paid request that could not succeed.
+ * Ethereum's VotingV2 YES_OR_NO_QUERY traffic is sparse, so it still opens
+ * wide. Both grow toward MAX_SPAN from here (ADR-0015).
+ */
+const INITIAL_SPAN: Record<ChainName, bigint> = { polygon: 4_000n, ethereum: 50_000n };
+/** Explicit, because forEachAdaptiveRange otherwise derives it as
+ *  initialSpan*8 — lowering the initial span would then quietly cut the sweep's
+ *  reach in the sparse 2024 ranges, where wide chunks are the whole win. */
+const MAX_SPAN: Record<ChainName, bigint> = { polygon: 400_000n, ethereum: 400_000n };
 
 const YES_OR_NO_IDENTIFIER = stringToHex("YES_OR_NO_QUERY", { size: 32 });
 
@@ -180,8 +193,13 @@ async function storeEvents(db: Db, rows: PendingEvent[]): Promise<number> {
 
 export async function indexPolygon(db: Db, opts: IndexOptions = {}): Promise<IndexStats> {
   // Deep sweep: primary (Infura) transport only — the free-tier fallback can't
-  // serve these getLogs ranges, so failing over to it just burns retries (ADR-0013).
-  const client = makeClient("polygon", { primaryOnly: true });
+  // serve these getLogs ranges, so failing over to it just burns retries
+  // (ADR-0013) — and a raised body cap so chunk size is bounded by the
+  // provider's 10k-log rule rather than viem's 10 MiB default (ADR-0015).
+  const client = makeClient("polygon", {
+    primaryOnly: true,
+    maxResponseBodySize: BACKFILL_MAX_RESPONSE_BYTES,
+  });
   const managedOracle = await resolveManagedOracle(client);
   const ooAddresses = [POLYGON_CONTRACTS.oov2, ...(managedOracle ? [managedOracle] : [])] as Hex[];
   logger.info({ managedOracle }, managedOracle ? "managed oracle resolved on-chain" : "no managed oracle found; indexing OOv2 only");
@@ -197,7 +215,7 @@ export async function indexPolygon(db: Db, opts: IndexOptions = {}): Promise<Ind
 
   await forEachAdaptiveRange(
     { fromBlock: startBlock, toBlock: endBlock },
-    { initialSpan: INITIAL_SPAN.polygon, label: "polygon" },
+    { initialSpan: INITIAL_SPAN.polygon, maxSpan: MAX_SPAN.polygon, label: "polygon" },
     async (chunk) => {
       const pending: PendingEvent[] = [];
 
@@ -307,7 +325,11 @@ async function resolveStartBlock(
 }
 
 export async function indexEthereum(db: Db, opts: IndexOptions = {}): Promise<IndexStats> {
-  const client = makeClient("ethereum", { primaryOnly: true }); // deep sweep; see indexPolygon
+  // Deep sweep; see indexPolygon.
+  const client = makeClient("ethereum", {
+    primaryOnly: true,
+    maxResponseBodySize: BACKFILL_MAX_RESPONSE_BYTES,
+  });
   const stateKey = chainStateKey("ethereum");
   const head = (await client.getBlock({ blockTag: "latest" })).number - CONFIRMATIONS.ethereum;
   const { startBlock, fromRecent } = await resolveStartBlock(db, client, stateKey, head, opts);
@@ -319,7 +341,7 @@ export async function indexEthereum(db: Db, opts: IndexOptions = {}): Promise<In
 
   await forEachAdaptiveRange(
     { fromBlock: startBlock, toBlock: endBlock },
-    { initialSpan: INITIAL_SPAN.ethereum, label: "ethereum" },
+    { initialSpan: INITIAL_SPAN.ethereum, maxSpan: MAX_SPAN.ethereum, label: "ethereum" },
     async (chunk) => {
       // All escalated YES_OR_NO_QUERY requests (identifier is indexed on both
       // events). Superset of Polymarket; narrowed at join time by ancillary prefix.

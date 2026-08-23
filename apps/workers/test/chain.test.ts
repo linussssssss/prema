@@ -38,6 +38,61 @@ describe("forEachAdaptiveRange", () => {
     expect(spans.reduce((a, b) => a + b, 0n)).toBe(500n);
   });
 
+  it("remembers a span that failed instead of re-probing it every few chunks", async () => {
+    // Simulates a provider with a hard per-request capacity, which is what the
+    // 10k-log rule and the body cap both amount to. Purely multiplicative
+    // growth rediscovers that ceiling roughly every third chunk; each of those
+    // probes is a paid request that cannot succeed (ADR-0015).
+    const capacity = 1_000n;
+    let failures = 0;
+    const seen: Array<[bigint, bigint]> = [];
+    await forEachAdaptiveRange(
+      { fromBlock: 0n, toBlock: 199_999n },
+      { initialSpan: 8_000n, minSpan: 64n, maxSpan: 400_000n },
+      async (c) => {
+        if (c.toBlock - c.fromBlock + 1n > capacity) {
+          failures += 1;
+          throw new Error("query returned more than 10000 results");
+        }
+        seen.push([c.fromBlock, c.toBlock]);
+      },
+    );
+
+    let next = 0n;
+    for (const [from, to] of seen) {
+      expect(from).toBe(next);
+      next = to + 1n;
+    }
+    expect(next).toBe(200_000n); // still covers the range exactly once
+    expect(seen.length).toBeGreaterThan(150);
+    // Purely multiplicative growth fails on ~1 attempt in 3, i.e. about one
+    // failure per two successful chunks (~100 here). Ceiling-capped growth
+    // pays only for the periodic relax probe (~25). Assert the ratio, not a
+    // constant, so the test states the property rather than today's arithmetic.
+    expect(failures).toBeLessThan(seen.length / 6);
+  });
+
+  it("still widens again after a run of clean chunks", async () => {
+    // Density varies by orders of magnitude across the backfill, so a learned
+    // ceiling must not permanently pin the sweep narrow.
+    const spans: bigint[] = [];
+    let failed = false;
+    await forEachAdaptiveRange(
+      { fromBlock: 0n, toBlock: 999_999n },
+      { initialSpan: 2_000n, minSpan: 64n, maxSpan: 400_000n, relaxAfter: 4 },
+      async (c) => {
+        const span = c.toBlock - c.fromBlock + 1n;
+        if (!failed && span > 1_500n) {
+          failed = true; // one early ceiling, then the range goes quiet
+          throw new Error("block range is too large");
+        }
+        spans.push(span);
+      },
+    );
+    expect(failed).toBe(true);
+    expect(spans.at(-1)!).toBeGreaterThan(10_000n);
+  });
+
   it("rethrows non-range errors", async () => {
     await expect(
       forEachAdaptiveRange({ fromBlock: 0n, toBlock: 9n }, { initialSpan: 10n }, async () => {
