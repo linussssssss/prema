@@ -55,25 +55,38 @@ ADRs as you go; `pnpm lint && pnpm typecheck && pnpm test` before "done".
       be near 100% for post-2024 markets; if low, compare derived ids against
       `QuestionInitialized` questionIDs (both stored in `resolution_events`).
 
-## P0 — resolve the MOOv2 question (dataset correctness depends on it)
+## P0 — resolve the MOOv2 question — ANSWERED 2026-08-23 (ADR-0014)
 
-Context: the brief says Polymarket moved to Managed OOv2 in late 2025, but on
-2026-08-22 both live adapters' `optimisticOracle()` returned plain OOv2 and
-live proposals ran through OOv2 (STATUS.md). If MOOv2 IS live somewhere we're
-not looking, we under-count disputes exactly where MOOv2 suppresses them.
-- [ ] After the full Gamma crawl: `SELECT DISTINCT resolved_by FROM markets`
-      — any address beyond the four known adapters is an unenumerated adapter;
-      look it up on Polygonscan, add to `chain/config.ts`, re-index.
-- [ ] Call `optimisticOracle()` on every distinct adapter found; any address
-      ≠ OOv2 is the MOOv2 → pin as `MOOV2_ADDRESS`, write the ADR, re-run
-      the OO indexer (state cursors mean only a re-scan of the relevant range
-      is needed — delete `chain:polygon:lastBlock` from `ingest_state` for a
-      full re-scan, events dedupe on insert).
+It was live all along, behind the V4 adapters. Both V4 adapters'
+`optimisticOracle()` returns **`0x2C0367a9DB231dDeBd88a94b4f6461a6e47C58B1`**,
+not plain OOv2; v3, old NegRisk and umaSportsOracle still return OOv2. The
+answer was hidden by an EIP-55 checksum bug in the V4 literals (ADR-0014):
+viem rejected them on `readContract` while `getLogs` — which lowercases —
+worked, so `resolveManagedOracle()` silently returned null.
+- [x] `SELECT DISTINCT resolved_by FROM markets` → found the V4 adapters
+      (ADR-0012).
+- [x] Called `optimisticOracle()` on every adapter. `resolveManagedOracle()`
+      now resolves the managed oracle at runtime, so **`MOOV2_ADDRESS` does
+      not need pinning** — leave it unset unless the getter ever breaks.
+- [ ] Confirm the `0x2C03…` name tag on Polygonscan and cite it in
+      `config.ts` (cosmetic — the address is read from the adapter itself, and
+      nothing hardcodes it).
 - [ ] Cross-check UMA's whitelist docs page (github UMAprotocol/uma-docs,
       managedoptimisticoraclev2/default-proposer-whitelist.md) — the ~37
       whitelisted proposer addresses are also a fingerprint: if recent
       ProposePrice proposers ⊆ that list, managed mode is de facto active
       even on the OOv2 contract.
+- [ ] **Watch the MOOv2 dispute rate on the re-scan.** An 11-hour probe window
+      (2026-08-23, blocks ~92.51–92.53M) captured 8,430 MOOv2 `ProposePrice`
+      and 6,881 `Settle` but **zero `DisputePrice`**. Note the decode path
+      itself is proven — the live DB holds 198 real `DisputePrice` rows from
+      the pre-V4 sweep, on plain OOv2 — so what is unobserved is specifically
+      a dispute *on the managed oracle*. Zero is consistent with disputes
+      being rare (~7/day predicts ~3 in that window, so 0 is ~5% likely). If
+      the full scan also yields ~0 MOOv2 disputes, suspect the
+      `requester`-filtered OO query or MOOv2 routing disputes through a
+      different event; compare against a known dispute on Polygonscan before
+      trusting any number.
 
 ## P1 — Phase 0 hardening (before anything is shown publicly)
 

@@ -1,10 +1,10 @@
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { eq } from "drizzle-orm";
-import { keccak256, stringToHex } from "viem";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
+import { and, eq } from "drizzle-orm";
+import { getAddress, isAddress, keccak256, stringToHex } from "viem";
 import { auditLog, createDb, ingestState, verifyAuditChain, type DbHandle } from "@verdict/schema";
 import { forEachAdaptiveRange, makeClient } from "../src/chain/client.ts";
 import { chainStateKey, resetChainCursor } from "../src/chain/indexer.ts";
-import { oracleLabelFor, POLYGON_CONTRACTS } from "../src/chain/config.ts";
+import { ETHEREUM_CONTRACTS, oracleLabelFor, POLYGON_CONTRACTS } from "../src/chain/config.ts";
 
 describe("forEachAdaptiveRange", () => {
   it("covers the whole range exactly once", async () => {
@@ -55,6 +55,17 @@ describe("chain config", () => {
     expect(oracleLabelFor("0x0000000000000000000000000000000000000000")).toBe("unknown");
   });
 
+  it("stores every address EIP-55 checksummed", () => {
+    // Regression guard (ADR-0014): viem throws "Address ... is invalid" on a
+    // mixed-case literal whose checksum doesn't match, so a mis-cased address
+    // breaks every readContract against it while getLogs — which lowercases
+    // first — keeps working. That asymmetry hid the V4 oracle for a day.
+    for (const [name, address] of [...Object.entries(POLYGON_CONTRACTS), ...Object.entries(ETHEREUM_CONTRACTS)]) {
+      if (typeof address !== "string") continue;
+      expect(isAddress(address, { strict: true }), `${name} should be ${getAddress(address.toLowerCase())}`).toBe(true);
+    }
+  });
+
   it("derives questionID the way UmaCtfAdapter does (keccak256 of ancillary bytes)", () => {
     // Sanity pin: the join rule disputes→markets relies on this equality.
     const ancillary = stringToHex("q: title: Will it rain tomorrow?");
@@ -98,14 +109,16 @@ describe("makeClient transport selection (ADR-0013)", () => {
 });
 
 describe("resetChainCursor (PGlite)", () => {
+  // One migrated instance for the suite: booting PGlite costs seconds, and the
+  // two cases touch different chains so they don't interfere.
   let handle: DbHandle;
 
-  beforeEach(async () => {
+  beforeAll(async () => {
     handle = await createDb("pglite://memory");
     await handle.migrate();
   });
 
-  afterEach(async () => {
+  afterAll(async () => {
     await handle.close();
   });
 
@@ -118,7 +131,10 @@ describe("resetChainCursor (PGlite)", () => {
 
     expect(result.previousBlock).toBe("61900000");
     expect(await handle.db.select().from(ingestState).where(eq(ingestState.key, key))).toHaveLength(0);
-    const audit = await handle.db.select().from(auditLog).where(eq(auditLog.action, "index.cursor.reset"));
+    const audit = await handle.db
+      .select()
+      .from(auditLog)
+      .where(and(eq(auditLog.action, "index.cursor.reset"), eq(auditLog.entityId, "polygon")));
     expect(audit).toHaveLength(1);
     expect(await verifyAuditChain(handle.db)).toBeNull(); // hash chain intact
   });

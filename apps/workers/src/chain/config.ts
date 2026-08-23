@@ -6,6 +6,10 @@ import { parseAbi } from "viem";
  *    public name tag for the NegRisk adapter.
  *  - OOv2 / VotingV2 / Finder: UMAprotocol/protocol networks/{137,1}.json.
  *  - ConditionalTokens: Polygonscan "Polymarket: Conditional Tokens" label.
+ * Addresses are stored EIP-55 checksummed: viem rejects a mixed-case literal
+ * whose checksum doesn't match ("Address ... is invalid"), which silently broke
+ * every readContract on the V4 adapters until 2026-08-23 (see ADR-0014).
+ * `chain.test.ts` pins this for all of them.
  * Event signatures verified against source in:
  *  - Polymarket/uma-ctf-adapter src/interfaces/IUmaCtfAdapter.sol
  *  - UMAprotocol/protocol OptimisticOracleV2Interface.sol
@@ -21,15 +25,15 @@ export const POLYGON_CONTRACTS = {
   // markets.resolved_by distribution: these two resolve ~1.88M of 2.62M
   // markets (the bulk of current markets incl. most of the ambiguous tail),
   // and postdate Polymarket's docs. See ADR-0012.
-  ctfAdapterV4: "0x65070be91477460d8A7AeEb94ef92fE056C2f2A7",
-  negRiskAdapterV4: "0x69c47De9d4d3daD79590d61b9e05918e03775F24",
+  ctfAdapterV4: "0x65070BE91477460D8A7AeEb94ef92fe056C2f2A7",
+  negRiskAdapterV4: "0x69c47De9D4D3Dad79590d61b9e05918E03775f24",
   negRiskAdapter: "0x2F5e3684cb1F318ec51b00Edba38d79Ac2c0aA9d",
   conditionalTokens: "0x4D97DCd97eC945f40cF65F87097ACe5EA0476045",
   oov2: "0xeE3Afe347D5C74317041E2618C49534dAf887c24",
   // UmaSportsOracle (multi-outcome sports, MULTIPLE_VALUES identifier — a
   // different mechanism from YES_OR_NO_QUERY). ~5.7k sports markets; its OO
   // events aren't captured by the YES_OR_NO_QUERY path. Deferred (ADR-0012).
-  umaSportsOracle: "0xB21182D0494521Cf45DbbeEbb5A3ACAab6d22093",
+  umaSportsOracle: "0xb21182d0494521Cf45DbbeEbb5A3ACAAb6d22093",
   // ManagedOptimisticOracleV2 (UMIP-189, late 2025): no published address found in
   // UMA docs/repos. Resolved at runtime by calling optimisticOracle() on the
   // live adapters (public immutable), or set MOOV2_ADDRESS in .env to pin it.

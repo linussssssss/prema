@@ -225,3 +225,47 @@ is on the record.
 topic encoding (~40% fewer calls). It needs hand-built topic arrays and mainnet
 verification; a wrong encoding would silently drop events. Tracked as
 RECOVERY.md §0.3(b).
+
+---
+
+## ADR-0014 — Store addresses EIP-55 checksummed; MOOv2 found behind V4 (2026-08-23)
+
+**Decision:** every address literal in `chain/config.ts` is stored in canonical
+EIP-55 checksummed form, pinned by a test over `POLYGON_CONTRACTS` +
+`ETHEREUM_CONTRACTS`. `MOOV2_ADDRESS` stays unset: the managed oracle is
+resolved at runtime from the adapters themselves.
+**The bug:** the V4 literals added in ADR-0012 (and `umaSportsOracle`) were
+transcribed with the wrong letter-casing, so their EIP-55 checksum was invalid.
+viem validates checksums on mixed-case addresses and throws
+`Address "0x65070be9…" is invalid`. This failed **asymmetrically**, which is
+why it survived review: `getLogs` lowercases the adapter list first
+(`ADAPTER_ADDRESSES.map(a => a.toLowerCase())`) and kept working perfectly,
+while every `readContract` against the same address threw. The only
+`readContract` we make is `optimisticOracle()` — so `resolveManagedOracle()`
+caught the throw, logged a warning, and returned `null`.
+**What that cost:** with `managedOracle: null` the indexer queried plain OOv2
+only. A 20k-block probe (blocks 92,511,300–92,531,300) captured 17,699 V4
+adapter events and **zero** OO events. After the casing fix the same window
+yields 8,430 `ProposePrice` + 6,881 `Settle` on the managed oracle. Since the
+V4 adapters resolve ~72% of the corpus, the full backfill would have recorded
+no proposals, no settlements and **no disputes** for ~1.88M markets — the
+composite label's primary signal, silently empty.
+**MOOv2, answered:** both V4 adapters return
+`0x2C0367a9DB231dDeBd88a94b4f6461a6e47C58B1` from `optimisticOracle()`;
+`ctfAdapterV3`, the old NegRisk adapter and `umaSportsOracle` all still return
+plain OOv2. This supersedes the STATUS.md finding that MOOv2 appeared not to be
+live — it is live, behind the adapter generation we hadn't enumerated. The
+address appears in no UMA doc or repo (STATUS.md); we read it off-chain from
+the adapter's public immutable, which is a stronger source than documentation
+and needs no hardcoding.
+**Alternatives:** lowercase every literal (viem accepts all-lowercase and skips
+the checksum) — rejected: checksummed addresses are the reviewable form, and
+lowercasing would delete the very error-detection that EIP-55 exists for.
+Pinning `MOOV2_ADDRESS` in `.env` — rejected: the runtime getter is
+self-updating and already correct; an env pin would go stale on the next
+adapter generation, which is exactly how this was missed.
+**Lesson (extends ADR-0012):** the earlier lesson was "verify contracts against
+on-chain reality, not docs". The sharper version: a config value can be wrong
+in a way that only breaks *one* of its uses. `resolveManagedOracle()` degraded
+to `null` on error rather than failing loudly, so a silent warning was the only
+symptom. Prefer loud failure for facts the dataset's correctness depends on.
