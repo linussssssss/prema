@@ -128,10 +128,10 @@ try {
 
   // 5) Exports + report
   mkdirSync(exportsDir, { recursive: true });
-  const { files, markets } = await exportAll(handle.db, exportsDir);
+  const { files, summary } = await exportAll(handle.db, exportsDir);
   step({ name: "export", status: "ok", detail: files.map((f) => path.basename(f)).join(", ") });
 
-  const report = await generateReport(handle.db, markets, info);
+  const report = await generateReport(handle.db, summary, info);
   const reportPath = path.join(dataDir, "REPORT.md");
   writeFileSync(reportPath, report, "utf8");
   logger.info({ reportPath, exports: files }, "dataset build complete");

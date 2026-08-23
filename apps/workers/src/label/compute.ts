@@ -15,6 +15,8 @@ import { LABEL_VERSION } from "../config.ts";
 import { logger } from "../lib/log.ts";
 
 const ACTOR = "label";
+/** Markets per round trip. See ADR-0019 — the corpus does not fit in memory. */
+const MARKET_BATCH = 20_000;
 
 export interface LabelStats {
   marketsLabeled: number;
@@ -58,24 +60,41 @@ export async function computeLabels(db: Db): Promise<LabelStats> {
   };
 
   // --- Lookup maps from venue data -----------------------------------------
-  const marketRows = await db
-    .select({
-      id: markets.id,
-      questionId: markets.questionId,
-      conditionId: markets.conditionId,
-      closed: markets.closed,
-      closedTime: markets.closedTime,
-      endDate: markets.endDate,
-      outcomePrices: markets.outcomePrices,
-      listedAt: markets.listedAt,
-      startDate: markets.startDate,
-    })
-    .from(markets);
+  // Streamed rather than loaded whole: the corpus is ~2.6M markets, and holding
+  // the rows *and* the derived maps at once needs multiple GB (ADR-0019). The
+  // venue-side resolved_na check is folded into the same pass so the rows never
+  // have to be retained.
   const byQuestionId = new Map<string, string>();
   const byConditionId = new Map<string, string>();
-  for (const m of marketRows) {
-    if (m.questionId) byQuestionId.set(m.questionId, m.id);
-    if (m.conditionId) byConditionId.set(m.conditionId, m.id);
+  const venueNaMarketIds = new Set<string>();
+  {
+    let cursor = "";
+    for (;;) {
+      const rows = await db
+        .select({
+          id: markets.id,
+          questionId: markets.questionId,
+          conditionId: markets.conditionId,
+          closed: markets.closed,
+          outcomePrices: markets.outcomePrices,
+        })
+        .from(markets)
+        .where(gt(markets.id,cursor))
+        .orderBy(asc(markets.id))
+        .limit(MARKET_BATCH);
+      if (rows.length === 0) break;
+      cursor = rows[rows.length - 1]!.id;
+      for (const m of rows) {
+        if (m.questionId) byQuestionId.set(m.questionId, m.id);
+        if (m.conditionId) byConditionId.set(m.conditionId, m.id);
+        // Venue-side fallback: closed markets whose final prices are exactly 0.5/0.5.
+        if (m.closed && Array.isArray(m.outcomePrices) && m.outcomePrices.length === 2) {
+          const [a, b] = m.outcomePrices as number[];
+          if (a === 0.5 && b === 0.5) venueNaMarketIds.add(m.id);
+        }
+      }
+      if (rows.length < MARKET_BATCH) break;
+    }
   }
 
   // --- Disputes from DisputePrice events -----------------------------------
@@ -194,13 +213,7 @@ export async function computeLabels(db: Db): Promise<LabelStats> {
       null;
     if (marketId) naMarketIds.add(marketId);
   }
-  // Venue-side fallback: closed markets whose final prices are exactly 0.5/0.5.
-  for (const m of marketRows) {
-    if (m.closed && Array.isArray(m.outcomePrices) && m.outcomePrices.length === 2) {
-      const [a, b] = m.outcomePrices as number[];
-      if (a === 0.5 && b === 0.5) naMarketIds.add(m.id);
-    }
-  }
+  for (const id of venueNaMarketIds) naMarketIds.add(id); // computed in the streaming pass above
 
   // --- rules_edited_after_listing ------------------------------------------
   const edited = await db
@@ -215,8 +228,25 @@ export async function computeLabels(db: Db): Promise<LabelStats> {
   const metricMarkets = await db
     .selectDistinct({ marketId: marketMetrics.marketId })
     .from(marketMetrics);
+  // Fetch just these markets rather than scanning the corpus per metric market:
+  // the previous `marketRows.find()` inside this loop was O(metrics x 2.6M).
+  const metricIds = metricMarkets.map((m) => m.marketId);
+  const metricMarketRows =
+    metricIds.length === 0
+      ? []
+      : await db
+          .select({
+            id: markets.id,
+            closed: markets.closed,
+            closedTime: markets.closedTime,
+            endDate: markets.endDate,
+            outcomePrices: markets.outcomePrices,
+          })
+          .from(markets)
+          .where(inArray(markets.id, metricIds));
+  const metricMarketById = new Map(metricMarketRows.map((m) => [m.id, m]));
   for (const { marketId } of metricMarkets) {
-    const market = marketRows.find((m) => m.id === marketId);
+    const market = metricMarketById.get(marketId);
     const closeAt = market?.closedTime ?? market?.endDate ?? null;
     if (!market || !market.closed || !closeAt || !Array.isArray(market.outcomePrices)) continue;
     const dayBefore = new Date(closeAt.getTime() - 24 * 3600 * 1000);
@@ -241,9 +271,19 @@ export async function computeLabels(db: Db): Promise<LabelStats> {
   }
 
   // --- Compose + append labels (only when changed) -------------------------
+  // Only the fingerprint fields, not whole rows — this map spans every labeled
+  // market and the unused columns are pure overhead at corpus scale.
   const latestLabels = new Map<string, string>();
   const existing = await db
-    .select()
+    .select({
+      marketId: ambiguityLabels.marketId,
+      disputed: ambiguityLabels.disputed,
+      escalated: ambiguityLabels.escalated,
+      resolvedNa: ambiguityLabels.resolvedNa,
+      rulesEditedAfterListing: ambiguityLabels.rulesEditedAfterListing,
+      priceReversal: ambiguityLabels.priceReversal,
+      labelVersion: ambiguityLabels.labelVersion,
+    })
     .from(ambiguityLabels)
     .orderBy(asc(ambiguityLabels.id));
   for (const l of existing) {
@@ -254,7 +294,18 @@ export async function computeLabels(db: Db): Promise<LabelStats> {
   }
 
   let batch: (typeof ambiguityLabels.$inferInsert)[] = [];
-  for (const m of marketRows) {
+  // Second streaming pass: the label decision needs only the market id.
+  let labelCursor = "";
+  for (;;) {
+  const marketIdRows = await db
+    .select({ id: markets.id })
+    .from(markets)
+    .where(gt(markets.id,labelCursor))
+    .orderBy(asc(markets.id))
+    .limit(MARKET_BATCH);
+  if (marketIdRows.length === 0) break;
+  labelCursor = marketIdRows[marketIdRows.length - 1]!.id;
+  for (const m of marketIdRows) {
     const disputed = disputedMarketIds.has(m.id);
     const escalated = escalatedMarketIds.has(m.id);
     const resolvedNa = naMarketIds.has(m.id);
@@ -286,6 +337,8 @@ export async function computeLabels(db: Db): Promise<LabelStats> {
       stats.labelsAppended += batch.length;
       batch = [];
     }
+  }
+  if (marketIdRows.length < MARKET_BATCH) break;
   }
   if (batch.length > 0) {
     await db.insert(ambiguityLabels).values(batch);

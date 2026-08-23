@@ -1,6 +1,6 @@
 import { asc, sql } from "drizzle-orm";
 import { disputes, type Db } from "@verdict/schema";
-import type { MarketExportRow } from "./exporters.ts";
+import { rowsOf, type ExportSummary } from "./exporters.ts";
 
 export interface BuildStep {
   name: string;
@@ -28,15 +28,13 @@ const RULES = [
 const pct = (n: number, d: number): string => (d === 0 ? "n/a" : `${((100 * n) / d).toFixed(1)}%`);
 const money = (n: number): string => `$${Math.round(n).toLocaleString("en-US")}`;
 
-export async function generateReport(db: Db, rows: MarketExportRow[], info: BuildInfo): Promise<string> {
-  const total = rows.length;
-  const closed = rows.filter((r) => r.closed === true).length;
-  const labeled = rows.filter((r) => r.contested !== null);
-  const contested = labeled.filter((r) => r.contested === true);
-  const disputed = labeled.filter((r) => r.disputed === true);
-  const escalated = labeled.filter((r) => r.escalated === true);
-  const resolvedNa = labeled.filter((r) => r.resolved_na === true);
-  const rulesEdited = labeled.filter((r) => r.rules_edited_after_listing === true);
+export async function generateReport(db: Db, summary: ExportSummary, info: BuildInfo): Promise<string> {
+  // Takes the streamed summary rather than the row set: the corpus does not fit
+  // in memory, and every figure below is an accumulation anyway (ADR-0019).
+  const total = summary.total;
+  const closed = summary.closed;
+  const labeledCount = summary.labeled;
+  const contestedCount = summary.contested;
 
   const chainComplete = info.steps.some((s) => s.name === "index-polygon" && s.status === "ok");
   const incomplete = info.steps.filter((s) => s.status !== "ok");
@@ -50,75 +48,58 @@ export async function generateReport(db: Db, rows: MarketExportRow[], info: Buil
   // listed before the 2024-01-01 corpus cut (ADR-0004) so we hold no rules text
   // for it. Structural and permanent, not a defect — but it must be stated, and
   // it must be counted from the data rather than asserted, so it stays true.
-  const [unlabelable] = (await db.execute(
-    sql`select count(*)::int as events,
+  const [unlabelable] = rowsOf<{ events: number; questions: number }>(
+    await db.execute(
+      sql`select count(*)::int as events,
                count(distinct question_id)::int as questions
         from resolution_events
         where event_name = 'DisputePrice'
           and question_id is not null
           and question_id not in (select question_id from markets where question_id is not null)`,
-  )) as unknown as Array<{ events: number; questions: number }>;
+    ),
+  );
   const orphanEvents = unlabelable?.events ?? 0;
   const orphanQuestions = unlabelable?.questions ?? 0;
 
-  const volumeAll = rows.reduce((a, r) => a + (r.volume_usd ?? 0), 0);
-  const volumeContested = contested.reduce((a, r) => a + (r.volume_usd ?? 0), 0);
+  const volumeAll = summary.volumeAll;
+  const volumeContested = summary.volumeContested;
 
-  // by month (listed_at)
-  const byMonth = new Map<string, { total: number; contested: number }>();
-  for (const r of rows) {
-    const month = r.listed_at?.slice(0, 7) ?? "unknown";
-    const entry = byMonth.get(month) ?? { total: 0, contested: 0 };
-    entry.total++;
-    if (r.contested) entry.contested++;
-    byMonth.set(month, entry);
-  }
-  const monthLines = [...byMonth.entries()]
+  const monthLines = [...summary.byMonth.entries()]
     .sort(([a], [b]) => a.localeCompare(b))
     .map(([m, v]) => `| ${m} | ${v.total} | ${v.contested} | ${pct(v.contested, v.total)} |`);
 
-  // by category (top 15)
-  const byCategory = new Map<string, { total: number; contested: number }>();
-  for (const r of rows) {
-    const cat = r.category ?? "uncategorized";
-    const entry = byCategory.get(cat) ?? { total: 0, contested: 0 };
-    entry.total++;
-    if (r.contested) entry.contested++;
-    byCategory.set(cat, entry);
-  }
-  const categoryLines = [...byCategory.entries()]
+  const categoryLines = [...summary.byCategory.entries()]
     .sort(([, a], [, b]) => b.total - a.total)
     .slice(0, 15)
     .map(([c, v]) => `| ${c} | ${v.total} | ${v.contested} | ${pct(v.contested, v.total)} |`);
 
-  // oracle mechanism distribution (answers the MOOv2 question at a glance)
-  const byMechanism = new Map<string, number>();
-  for (const r of rows) byMechanism.set(r.oracle_mechanism, (byMechanism.get(r.oracle_mechanism) ?? 0) + 1);
-  const mechanismLines = [...byMechanism.entries()]
+  const mechanismLines = [...summary.byMechanism.entries()]
     .sort(([, a], [, b]) => b - a)
     .map(([m, c]) => `| ${m} | ${c} | ${pct(c, total)} |`);
 
-  // linter hit rates by label
-  const withRules = labeled.filter((r) => r.rules_version_count > 0);
-  const contestedWithRules = withRules.filter((r) => r.contested === true);
-  const cleanWithRules = withRules.filter((r) => r.contested === false);
+  // Contested rate by volume decile. A rate averaged over a corpus that is
+  // mostly trivial markets is true and close to useless; disputes concentrate
+  // in high-stakes markets, so this cut is what makes the number interpretable.
+  const decileLines = [...summary.byDecile.entries()]
+    .sort(([a], [b]) => a - b)
+    .map(([d, v]) => `| ${d}${d === 10 ? " (highest)" : d === 1 ? " (lowest)" : ""} | ${v.total} | ${v.contested} | ${pct(v.contested, v.total)} |`);
+
+  const withRules = summary.withRules;
+  const contestedWithRules = summary.contestedWithRules;
+  const cleanWithRules = summary.cleanWithRules;
   const ruleLines = RULES.map((col) => {
     const name = col.replace(/^hit_/, "").replace(/_/g, "-");
-    const hitAll = withRules.filter((r) => (r[col] as number) > 0).length;
-    const hitContested = contestedWithRules.filter((r) => (r[col] as number) > 0).length;
-    const hitClean = cleanWithRules.filter((r) => (r[col] as number) > 0).length;
-    const pC = contestedWithRules.length ? hitContested / contestedWithRules.length : 0;
-    const pN = cleanWithRules.length ? hitClean / cleanWithRules.length : 0;
+    const s = summary.ruleStats.get(col) ?? { all: 0, contested: 0, clean: 0 };
+    const pC = contestedWithRules ? s.contested / contestedWithRules : 0;
+    const pN = cleanWithRules ? s.clean / cleanWithRules : 0;
     const lift = pN > 0 ? (pC / pN).toFixed(2) : "n/a";
-    return `| ${name} | ${pct(hitAll, withRules.length)} | ${pct(hitContested, contestedWithRules.length)} | ${pct(hitClean, cleanWithRules.length)} | ${lift} |`;
+    return `| ${name} | ${pct(s.all, withRules)} | ${pct(s.contested, contestedWithRules)} | ${pct(s.clean, cleanWithRules)} | ${lift} |`;
   });
 
   const exampleFor = (col: (typeof RULES)[number]): string => {
-    const examples = rows
-      .filter((r) => (r[col] as number) > 0)
-      .sort((a, b) => (b.volume_usd ?? 0) - (a.volume_usd ?? 0))
-      .slice(0, 3)
-      .map((r) => `  - "${r.question}" (${r.slug ?? r.market_id})`);
+    const examples = (summary.examples.get(col) ?? []).map(
+      (e) => `  - "${e.question}" (${e.slug ?? e.market_id})`,
+    );
     return examples.length > 0 ? examples.join("\n") : "  - (none found)";
   };
 
@@ -153,13 +134,23 @@ ${sanity}
 | markets (created ≥ 2024-01-01) | ${total} |
 | closed | ${closed} |
 | open | ${total - closed} |
-| labeled | ${labeled.length} |
-| disputed | ${disputed.length} |
-| escalated (DVM vote) | ${escalated.length} |
-| resolved N/A (50-50) | ${resolvedNa.length} |
-| rules edited after listing | ${rulesEdited.length} |
-| **contested (composite)** | **${contested.length}** (${pct(contested.length, labeled.length)} of labeled) |
+| labeled | ${labeledCount} |
+| disputed | ${summary.disputed} |
+| escalated (DVM vote) | ${summary.escalated} |
+| resolved N/A (50-50) | ${summary.resolvedNa} |
+| rules edited after listing | ${summary.rulesEdited} |
+| **contested (composite)** | **${contestedCount}** (${pct(contestedCount, labeledCount)} of labeled) |
 | dispute records (oracle requests) | ${disputeRows.length} |
+
+## Contested rate by volume decile
+
+Disputes concentrate in high-stakes markets, so the corpus-wide rate above
+averages over a population most of which nobody trades. Decile 10 is the
+highest-volume tenth; markets with no volume figure are excluded.
+
+| decile | markets | contested | rate |
+|---|---|---|---|
+${decileLines.length > 0 ? decileLines.join("\n") : "| (no volume data) | | | |"}
 
 ## Known gaps
 

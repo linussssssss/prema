@@ -447,3 +447,56 @@ insert-per-hit shape was fine for the 6k demo slice and would have needed ~5 GB
 of heap and ~13M round trips against the real 2.6M-version corpus — it would
 have died on first contact with production data. Same signature, so
 `dataset:build` is unaffected.
+
+---
+
+## ADR-0019 — The whole pipeline streams; nothing loads the corpus (2026-08-23)
+
+**Decision:** every stage that touches all markets now works on bounded
+batches — the linter (ADR-0018), the label job, and the export. `exportAll`
+returns an accumulated `ExportSummary` instead of the row array, and
+`generateReport` consumes that.
+
+**Why, and why it was urgent.** Fixing the linter revealed the same shape in
+the two stages that run *after* it, both of them after a ~1-day backfill:
+
+- `assembleMarketRows` selected every market (all columns), every label, every
+  rules version and every linter hit into memory, then returned 2.6M assembled
+  rows — roughly 4 GB against Node's ~4 GB default heap.
+- `writeCsv` built one string per row plus a single joined string for the file:
+  ~2 GB of transient allocation on top.
+- `rules_versions.csv` selected whole rows — ~2.6 GB of rules text — purely to
+  call `.length`. Now `length(rules_text)` in SQL.
+- `computeLabels` held 2.6M market rows *and* two derived id maps at once, and
+  resolved price-reversal markets with `marketRows.find()` **inside a loop** —
+  O(metrics x 2.6M).
+
+All of it was sized for the 6k demo slice and correct there. The failure would
+have landed at the end of the longest job we run, which is the worst place to
+discover it: the chain data survives in Postgres, but the export and REPORT.md
+do not.
+
+**Consequence for the report:** every figure it prints is an accumulation, so
+the summary loses nothing — counts, volumes, by-month, by-category,
+by-mechanism, per-rule lift, and top-3 examples per rule are all accumulated in
+one pass. Where the old code re-scanned the rows for examples, a running top-N
+now does the same job.
+
+**Added while here, from the website session's `EXPORTER-GAPS.md`:**
+`volume_decile`, `venue_id`, `closed_time`, `outcomes`, `outcome_prices`,
+`label_computed_at`. Deciles come from nine `percentile_cont` cuts computed once
+rather than `ntile(10)`, which would need the corpus ranked in a single pass;
+the split is the same and it survives batching. **A null volume yields a null
+decile** — "unknown stakes" and "lowest stakes" are different claims. REPORT.md
+now prints contested rate by decile, because a rate averaged over a corpus that
+is mostly trivial markets is true and nearly useless: disputes concentrate in
+high-stakes markets.
+
+**Also:** `rowsOf()` normalizes `db.execute()` results, because postgres.js
+returns an array and PGlite returns `{ rows }`, and both are supported
+(ADR-0003). And the `hit_*` columns now carry a comment at the point of
+computation saying they are a *latest-text* view: anything claiming to be
+hindsight-free (ADR-0009) must join `linter_hits` to
+`rules_versions WHERE version_num = 1` instead. The two diverge precisely on
+rules-edited markets, in the direction that flatters us — caught by the website
+session before it reached a page.
