@@ -76,6 +76,13 @@ export async function generateReport(db: Db, rows: MarketExportRow[], info: Buil
     .slice(0, 15)
     .map(([c, v]) => `| ${c} | ${v.total} | ${v.contested} | ${pct(v.contested, v.total)} |`);
 
+  // oracle mechanism distribution (answers the MOOv2 question at a glance)
+  const byMechanism = new Map<string, number>();
+  for (const r of rows) byMechanism.set(r.oracle_mechanism, (byMechanism.get(r.oracle_mechanism) ?? 0) + 1);
+  const mechanismLines = [...byMechanism.entries()]
+    .sort(([, a], [, b]) => b - a)
+    .map(([m, c]) => `| ${m} | ${c} | ${pct(c, total)} |`);
+
   // linter hit rates by label
   const withRules = labeled.filter((r) => r.rules_version_count > 0);
   const contestedWithRules = withRules.filter((r) => r.contested === true);
@@ -155,6 +162,15 @@ ${monthLines.join("\n")}
 | category | markets | contested | rate |
 |---|---|---|---|
 ${categoryLines.join("\n")}
+
+## Oracle mechanism (from on-chain OO events)
+
+A nonzero \`moov2\` row means Managed OOv2 is live on-chain; \`unknown\` means no
+OO event was joined to the market (open/unresolved, or a join gap).
+
+| mechanism | markets | share |
+|---|---|---|
+${mechanismLines.join("\n")}
 
 ## Linter hit rates (latest rules version per market)
 

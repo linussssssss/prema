@@ -4,7 +4,8 @@
   "type": "module",
   "scripts": {
     "typecheck": "tsc --noEmit",
-    "dataset:build": "tsx src/build.ts"
+    "dataset:build": "tsx src/build.ts",
+    "validate": "tsx src/validate.ts"
   },
   "dependencies": {
     "@dsnp/parquetjs": "^1.8.0",

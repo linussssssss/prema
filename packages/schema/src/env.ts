@@ -5,6 +5,15 @@ import path from "node:path";
 
 let loaded = false;
 
+/** Apply parsed .env content to `target`, never overriding an existing value.
+ *  Pure and side-effect-free (given a target) — this is the testable core. */
+export function applyEnv(content: string, target: NodeJS.ProcessEnv = process.env): void {
+  const parsed = parseEnv(content);
+  for (const [k, v] of Object.entries(parsed)) {
+    if (target[k] === undefined) target[k] = v;
+  }
+}
+
 /**
  * Load `.env` into process.env WITHOUT overriding already-set variables
  * (so an inline `DATABASE_URL=…` or CI secrets always win over the file).
@@ -29,9 +38,6 @@ export function loadEnv(): void {
     } catch {
       continue; // not present here; try the next location
     }
-    const parsed = parseEnv(content);
-    for (const [k, v] of Object.entries(parsed)) {
-      if (process.env[k] === undefined) process.env[k] = v;
-    }
+    applyEnv(content);
   }
 }
