@@ -169,11 +169,40 @@ backfill. But three things are already actionable and two are uncomfortable.
       have (high-profile, expensive, independently adjudicated by a DVM vote) —
       make it a linter fixture and treat it as a regression target for v2.
       Credit: the case was identified by the website session.
-- [ ] **Reconcile the Strategy market's volume.** Our Gamma figure is
-      **~$375.8M**; press reporting says $60M–$150M. One of them is wrong, or
-      `volumeNum` is not what we assume (both sides counted? shares not USD?).
-      This matters beyond one market: `volume_usd` now drives `volume_decile`,
-      and every stakes-conditioned number rests on it.
+- [x] **Strategy market volume — RESOLVED 2026-08-23, not our bug.** Gamma
+      itself returns `volume` = `volumeNum` = `volumeClob` =
+      **375,813,104.556** for market 2169995, exactly what we stored. Press
+      ">$60M" is a lower bound and compatible. The one genuinely open question
+      is whether Gamma's lifetime `volume` counts both sides of each trade —
+      **but that does not affect `volume_decile`, which is rank-based, so any
+      uniform scaling leaves deciles identical.** Stakes-conditioned analysis
+      is therefore safe; only absolute dollar claims need the caveat. (Note
+      `volume1yr` reads 70.76 on the same market — the windowed fields are not
+      interchangeable with lifetime `volume`; don't mix them.)
+
+## P0 — signal validation: does listing-time text carry the signal? (NOW)
+
+The falsification test for the whole thesis. If contested markets' listing-time
+text contains visible ambiguity, linter v1 is merely weak and a better
+extractor fixes it. If it does not, listing-time scoring has a ceiling no model
+raises and the product changes shape. Everything in P1/P2 is downstream of it.
+
+- [x] **Blinded sample built** — `pnpm --filter @verdict/data run blind-study`
+      writes `data/blind/ambiguity-study.json` (170 items: 85 contested + 85
+      controls matched on listing month, category and volume band) plus
+      `key.json`. Deterministic seed, gitignored — rebuildable, and neither the
+      answers nor 170 markets' verbatim rules text belong in a public repo
+      (SEO.md §4).
+- [ ] **Judgement — assigned to the website session** (`PROMPT-web-parallel-3.md`).
+      The judge must not know the labels: this session does, so its judgement
+      here would be worthless — it would find ambiguity in every contested
+      market because it knows the answer. The blind is structural, not a
+      promise to be careful.
+- [ ] **Unblind and score.** Contested-vs-control ambiguity rate, plus the
+      `kind` breakdown, which is the direct input to linter v2's rule set.
+- [ ] **Decision gate.** A large gap → build the Phase 1 extractor aimed at the
+      `kind`s that dominate. Little or no gap → stop and rethink the product
+      before writing more scoring code.
 
 ## P1 — Phase 0 hardening (before anything is shown publicly)
 

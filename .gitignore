@@ -14,6 +14,13 @@ data/exports/
 data/raw/
 *.pglite/
 
+# blinded ambiguity study: rebuildable via `pnpm --filter @verdict/data run
+# blind-study` (deterministic seed). Not committed for two reasons — key.json
+# would publish the answers next to the questions, and ambiguity-study.json
+# carries 170 markets' verbatim rules text, which SEO.md §4 says we don't
+# republish wholesale.
+data/blind/
+
 # python
 eval/.venv/
 __pycache__/

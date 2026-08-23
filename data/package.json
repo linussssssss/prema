@@ -6,7 +6,8 @@
     "typecheck": "tsc --noEmit",
     "dataset:build": "tsx src/build.ts",
     "validate": "tsx src/validate.ts",
-    "postmortem": "tsx src/postmortem.ts"
+    "postmortem": "tsx src/postmortem.ts",
+    "blind-study": "tsx src/cli-blind-study.ts"
   },
   "dependencies": {
     "@dsnp/parquetjs": "^1.8.0",
