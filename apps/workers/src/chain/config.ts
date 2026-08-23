@@ -1,4 +1,4 @@
-import { parseAbi } from "viem";
+import { encodeEventTopics, parseAbi, type Hex } from "viem";
 
 /**
  * All addresses verified 2026-08-22 against primary sources:
@@ -84,6 +84,23 @@ export const oov2Abi = parseAbi([
   "event DisputePrice(address indexed requester, address indexed proposer, address indexed disputer, bytes32 identifier, uint256 timestamp, bytes ancillaryData, int256 proposedPrice)",
   "event Settle(address indexed requester, address indexed proposer, address indexed disputer, bytes32 identifier, uint256 timestamp, bytes ancillaryData, int256 price, uint256 payout)",
 ]);
+
+/**
+ * topic0 for each OO event, so all three can be fetched in one `eth_getLogs`
+ * instead of three (ADR-0018).
+ *
+ * This is only sound because `requester` is the **first indexed parameter on
+ * all three** events — ProposePrice(requester, proposer, ...),
+ * DisputePrice(requester, proposer, disputer, ...) and
+ * Settle(requester, proposer, disputer, ...) — so it always lands in topic1 and
+ * a single topic1 OR-set filters every one of them identically. If an event is
+ * ever added here whose first indexed arg is something else, this collapses
+ * silently and must not be used. `chain.test.ts` pins both the selectors and
+ * that invariant.
+ */
+export const OO_EVENT_TOPICS = oov2Abi.map(
+  (event) => encodeEventTopics({ abi: [event], eventName: event.name })[0] as Hex,
+);
 
 export const ctfAbi = parseAbi([
   "event ConditionResolution(bytes32 indexed conditionId, address indexed oracle, bytes32 indexed questionId, uint256 outcomeSlotCount, uint256[] payoutNumerators)",

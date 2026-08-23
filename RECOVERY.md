@@ -45,8 +45,8 @@ public-name tags (cited in config.ts).
 pnpm --filter @verdict/workers run ingest:chain -- --reset-cursor --chain polygon
 DATASET_SKIP_GAMMA=1 pnpm dataset:build      # chain + linter + labels + export
 ```
-- **Credit reality — settled 2026-08-23 by measurement: ~5.2M credits, ~2
-  free-tier days.** Infura caps `eth_getLogs` at **10,000 blocks regardless of
+- **Credit reality — measured, then improved: ~3.2M credits, ~1 free-tier day**
+  after ADR-0018 cut the OO calls from 3 to 1 (it was ~5.2M / ~2 days). Infura caps `eth_getLogs` at **10,000 blocks regardless of
   result size** (measured: a near-empty query failed at 15,625 blocks and
   succeeded at 7,812). ADR-0002 had recorded "any range under 10k logs", which
   was wrong, and every cost estimate rested on it. The cap is a hard floor:
@@ -60,8 +60,12 @@ DATASET_SKIP_GAMMA=1 pnpm dataset:build      # chain + linter + labels + export
   more days, never a bill. It is resumable across days at no extra cost.
 - **Ways to fit sooner (pick one, ask before spending):**
   (a) spread over days — free, default, just re-run daily;
-  (b) fewer-getLogs optimization — combine the 3 OO event calls into 1 via
-      manual topics (~40% fewer calls); dev effort + needs testing before trust;
+  (b) ~~fewer-getLogs optimization~~ — **DONE 2026-08-23 (ADR-0018).** The 3 OO
+      calls are now 1, so a chunk costs 3 getLogs instead of 5: **~40% fewer
+      credits, ~3.2M total, which fits the sweep in a single free day.**
+      Verified by running both forms over three real ranges and comparing
+      result sets — identical on all three, 8,316 logs including the rare
+      DisputePrice events;
   (c) Alchemy Pay As You Go — **no longer "one paid month"**: Growth/Scale
       became usage-based on 2025-02-01. $0.45/1M CU, no platform fee, no
       documented minimum, and a dashboard usage cap. getLogs = 60 CU with

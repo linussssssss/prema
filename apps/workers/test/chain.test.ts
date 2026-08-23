@@ -1,10 +1,25 @@
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { and, eq } from "drizzle-orm";
-import { getAddress, isAddress, keccak256, stringToHex } from "viem";
+import {
+  encodeAbiParameters,
+  getAddress,
+  isAddress,
+  keccak256,
+  pad,
+  stringToHex,
+  type Hex,
+  type RpcLog,
+} from "viem";
 import { auditLog, createDb, ingestState, verifyAuditChain, type DbHandle } from "@verdict/schema";
 import { forEachAdaptiveRange, makeClient } from "../src/chain/client.ts";
-import { chainStateKey, resetChainCursor } from "../src/chain/indexer.ts";
-import { ETHEREUM_CONTRACTS, oracleLabelFor, POLYGON_CONTRACTS } from "../src/chain/config.ts";
+import { chainStateKey, decodeOoLogs, resetChainCursor } from "../src/chain/indexer.ts";
+import {
+  ETHEREUM_CONTRACTS,
+  OO_EVENT_TOPICS,
+  oov2Abi,
+  oracleLabelFor,
+  POLYGON_CONTRACTS,
+} from "../src/chain/config.ts";
 
 describe("forEachAdaptiveRange", () => {
   it("covers the whole range exactly once", async () => {
@@ -145,6 +160,59 @@ describe("chain config", () => {
     expect(oracleLabelFor(POLYGON_CONTRACTS.negRiskAdapter.toUpperCase().replace("0X", "0x"))).toBe("neg_risk_adapter");
     expect(oracleLabelFor(POLYGON_CONTRACTS.oov2)).toBe("oov2");
     expect(oracleLabelFor("0x0000000000000000000000000000000000000000")).toBe("unknown");
+  });
+
+  it("pins the OO topic0 selectors and the requester-position invariant", () => {
+    // The single-call OO query (ADR-0018) is only correct because `requester`
+    // is the first indexed arg on all three events, so it always lands in
+    // topic1 and one topic1 OR-set filters all of them. If an event is added
+    // whose first indexed arg differs, the filter silently stops matching it.
+    for (const event of oov2Abi) {
+      const firstIndexed = event.inputs.find((i) => "indexed" in i && i.indexed === true);
+      expect(firstIndexed?.name, `${event.name} must keep requester first-indexed`).toBe("requester");
+    }
+    expect(OO_EVENT_TOPICS).toHaveLength(3);
+    for (const topic of OO_EVENT_TOPICS) expect(topic).toMatch(/^0x[0-9a-f]{64}$/);
+    // DisputePrice's selector, as echoed back by Infura in a live eth_getLogs
+    // request on 2026-08-23 — an external check on our ABI text, not a
+    // self-consistent restatement of it.
+    const disputeTopic = OO_EVENT_TOPICS[oov2Abi.findIndex((e) => e.name === "DisputePrice")];
+    expect(disputeTopic).toBe("0x5165909c3d1c01c5d1e121ac6f6d01dda1ba24bc9e1f975b5a375339c15be7f3");
+  });
+
+  it("decodes combined-topic OO logs and never drops one silently", () => {
+    const settle = OO_EVENT_TOPICS[oov2Abi.findIndex((e) => e.name === "Settle")]!;
+    const good: RpcLog = {
+      address: "0x2c0367a9db231ddebd88a94b4f6461a6e47c58b1",
+      topics: [
+        settle,
+        pad("0x65070be91477460d8a7aeeb94ef92fe056c2f2a7", { size: 32 }),
+        pad("0x0000000000000000000000000000000000000001", { size: 32 }),
+        pad("0x0000000000000000000000000000000000000002", { size: 32 }),
+      ],
+      data: encodeAbiParameters(
+        [{ type: "bytes32" }, { type: "uint256" }, { type: "bytes" }, { type: "int256" }, { type: "uint256" }],
+        [stringToHex("YES_OR_NO_QUERY", { size: 32 }), 1n, stringToHex("q: title: x"), 1n, 2n],
+      ),
+      blockNumber: "0x10",
+      logIndex: "0x3",
+      transactionHash: `0x${"ab".repeat(32)}`,
+      blockHash: `0x${"cd".repeat(32)}`,
+      transactionIndex: "0x0",
+      removed: false,
+    };
+    const decoded = decodeOoLogs([good]);
+    expect(decoded).toHaveLength(1);
+    expect(decoded[0]!.eventName).toBe("Settle");
+    expect(decoded[0]!.blockNumber).toBe(16n);
+    expect(decoded[0]!.logIndex).toBe(3);
+    // Round-trips to the same checksummed literal config.ts holds.
+    expect(decoded[0]!.args.requester).toBe(POLYGON_CONTRACTS.ctfAdapterV4);
+
+    // Undecodable input is reported, not quietly skipped: we selected these
+    // logs by our own topic0 list, so a decode failure means a real defect.
+    const bad = { ...good, data: "0xdeadbeef" as Hex };
+    expect(decodeOoLogs([bad])).toHaveLength(0);
   });
 
   it("stores every address EIP-55 checksummed", () => {

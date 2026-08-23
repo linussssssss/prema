@@ -1,11 +1,23 @@
 import { eq } from "drizzle-orm";
-import { hexToString, keccak256, stringToHex, type Hex, type PublicClient } from "viem";
+import {
+  decodeEventLog,
+  hexToBigInt,
+  hexToNumber,
+  hexToString,
+  keccak256,
+  pad,
+  stringToHex,
+  type Hex,
+  type PublicClient,
+  type RpcLog,
+} from "viem";
 import { appendAudit, ingestState, resolutionEvents, votes, type Db } from "@verdict/schema";
 import { DATASET_START } from "../config.ts";
 import { logger } from "../lib/log.ts";
 import {
   ADAPTER_ADDRESSES,
   ETHEREUM_CONTRACTS,
+  OO_EVENT_TOPICS,
   POLYGON_CONTRACTS,
   adapterAbi,
   ctfAbi,
@@ -18,6 +30,7 @@ import {
   chunkTimeInterpolator,
   findBlockByTimestamp,
   forEachAdaptiveRange,
+  getLogsByTopics,
   makeClient,
   type ChainName,
 } from "./client.ts";
@@ -153,6 +166,47 @@ export async function resetChainCursor(db: Db, chain: ChainName): Promise<Cursor
   return { chain, key, previousBlock: previous?.toString() ?? null };
 }
 
+/** Shape the rest of the indexer expects from a decoded log — the subset of
+ *  viem's decoded `getLogs` output that `indexPolygon` actually reads. */
+export interface DecodedLog {
+  address: string;
+  eventName: string;
+  args: Record<string, unknown>;
+  transactionHash: string;
+  logIndex: number;
+  blockNumber: bigint;
+}
+
+/**
+ * Decode the raw OO logs from the combined topic query. A decode failure here
+ * is not tolerable the way an adapter-v1 mismatch is: we selected these logs by
+ * our own topic0 list, so anything that fails to decode means the ABI and the
+ * selector disagree — log it loudly rather than dropping it silently.
+ */
+export function decodeOoLogs(raw: RpcLog[]): DecodedLog[] {
+  const out: DecodedLog[] = [];
+  for (const log of raw) {
+    if (!log.transactionHash || log.logIndex === null || log.blockNumber === null) continue;
+    try {
+      const decoded = decodeEventLog({ abi: oov2Abi, data: log.data, topics: log.topics as [Hex, ...Hex[]] });
+      out.push({
+        address: log.address,
+        eventName: decoded.eventName,
+        args: (decoded.args ?? {}) as Record<string, unknown>,
+        transactionHash: log.transactionHash,
+        logIndex: hexToNumber(log.logIndex),
+        blockNumber: hexToBigInt(log.blockNumber),
+      });
+    } catch (err) {
+      logger.error(
+        { topic0: log.topics[0], tx: log.transactionHash, err: String(err).slice(0, 160) },
+        "OO log matched our topic filter but failed to decode",
+      );
+    }
+  }
+  return out;
+}
+
 async function getStateBlock(db: Db, key: string): Promise<bigint | null> {
   const rows = await db.select().from(ingestState).where(eq(ingestState.key, key));
   const value = rows[0]?.value as { lastBlock?: string } | undefined;
@@ -231,14 +285,16 @@ export async function indexPolygon(db: Db, opts: IndexOptions = {}): Promise<Ind
         events: adapterAbi.filter((x) => x.type === "event"),
         ...chunk,
       });
-      // 2) OO requests initiated by the adapters (requester is indexed on all three).
-      const ooLogs = (
-        await Promise.all(
-          oov2Abi.map((event) =>
-            client.getLogs({ address: ooAddresses, event, args: { requester: adapterLower }, ...chunk }),
-          ),
-        )
-      ).flat();
+      // 2) OO requests initiated by the adapters. One call for all three events
+      //    via hand-built topics (ADR-0018): topic0 ∈ {Propose,Dispute,Settle},
+      //    topic1 ∈ adapters — `requester` is the first indexed arg on each.
+      const ooLogs = decodeOoLogs(
+        await getLogsByTopics(client, {
+          address: ooAddresses,
+          topics: [OO_EVENT_TOPICS, adapterLower.map((a) => pad(a, { size: 32 }))],
+          ...chunk,
+        }),
+      );
       // 3) CTF resolutions where an adapter is the oracle.
       const ctfLogs = await client.getLogs({
         address: POLYGON_CONTRACTS.conditionalTokens as Hex,

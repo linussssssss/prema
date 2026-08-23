@@ -397,3 +397,53 @@ bursts are deduped to distinct markets.
 **Lesson:** a zero is a measurement, not a conclusion. The cost of checking was
 ~25k credits and a few minutes; the cost of believing it would have been
 re-architecting the label around a problem that does not exist.
+
+---
+
+## ADR-0018 — One getLogs for all three OO events via manual topics (2026-08-23)
+
+**Decision:** the OO query in `indexPolygon` issues a single `eth_getLogs` with
+hand-built topics — `topic0 ∈ {ProposePrice, DisputePrice, Settle}` and
+`topic1 ∈ adapters` — instead of three separate viem `getLogs` calls. Chunk
+cost drops from 5 calls to 3, about **40% fewer credits**, which given
+ADR-0016's 10k-block floor is the difference between a ~2-day and a ~1-day
+backfill. Deferred since RECOVERY §0.3(b); implemented now that the floor makes
+it worth the risk.
+
+**Why it needs raw JSON-RPC.** viem's `getLogs` cannot express "any of these
+events AND this indexed argument". Passing `events` (plural) makes it drop
+`args` outright — `args: events_ ? undefined : args` in its source — so the
+filter silently *widens* to every event on the contract instead of erroring.
+That is the trap the deferral warned about, and it fails in the direction that
+looks like success. Hence `getLogsByTopics()` at the JSON-RPC level, where both
+topic positions can be OR-sets.
+
+**Why one call is sound.** `requester` is the first indexed parameter on all
+three events, so it always occupies topic1 and one OR-set filters all of them
+identically. This is an invariant of the ABI, not of our code, so `chain.test.ts`
+asserts it directly: if an event is ever added whose first indexed argument is
+something else, the test fails rather than the sweep quietly missing rows.
+
+**Verification — the part that mattered.** The failure mode is returning
+*fewer* logs, which no unit test can detect. Both forms were run over three
+real ranges and their result sets compared by
+`(txHash, logIndex, eventName)`:
+
+| range | old (3 calls) | new (1 call) |
+|---|---|---|
+| 87,733,000–87,743,000 (June dispute cluster) | 2,064 | 2,064 |
+| 92,520,000–92,527,500 (dense, recent) | 5,128 | 5,128 |
+| 81,053,171–81,060,982 (early 2026) | 1,124 | 1,124 |
+
+Identical sets on all three — 8,316 logs including the rare `DisputePrice`
+(18 and 3 respectively), which is the class most at risk from a bad filter.
+Decode failures are logged at `error` rather than skipped: these logs were
+selected by our own topic0 list, so a failure means the ABI and the selector
+disagree, which must never pass silently.
+
+**Also here:** `runLinterOverRules` was rewritten to stream by keyset over
+`rules_versions.id` with bulk inserts. The previous select-everything,
+insert-per-hit shape was fine for the 6k demo slice and would have needed ~5 GB
+of heap and ~13M round trips against the real 2.6M-version corpus — it would
+have died on first contact with production data. Same signature, so
+`dataset:build` is unaffected.

@@ -8,6 +8,7 @@
     "typecheck": "tsc --noEmit",
     "ingest:polymarket": "tsx src/cli/ingest-polymarket.ts",
     "ingest:chain": "tsx src/cli/ingest-chain.ts",
+    "lint:rules": "tsx src/cli/lint-rules.ts",
     "snapshot:clob": "tsx src/cli/snapshot-clob.ts",
     "label": "tsx src/cli/label.ts"
   },

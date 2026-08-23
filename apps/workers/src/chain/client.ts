@@ -2,8 +2,11 @@ import {
   createPublicClient,
   fallback,
   http,
+  numberToHex,
   type Chain,
+  type Hex,
   type PublicClient,
+  type RpcLog,
 } from "viem";
 import { mainnet, polygon } from "viem/chains";
 import { logger } from "../lib/log.ts";
@@ -104,6 +107,33 @@ export function makeClient(chain: ChainName, opts: ClientOptions = {}): PublicCl
     chain: CHAINS[chain],
     transport: transports.length > 1 ? fallback(transports) : transports[0]!,
   });
+}
+
+/**
+ * Raw `eth_getLogs` with hand-built topics.
+ *
+ * viem's `getLogs` cannot express "any of these events AND this indexed
+ * argument": passing `events` (plural) makes it drop `args` entirely
+ * (`args: events_ ? undefined : args` in its source), which would silently
+ * widen the filter to every event on the contract rather than erroring. So the
+ * OO query is issued at the JSON-RPC level, where topic0 and topic1 can both
+ * be OR-sets. Returns undecoded logs; the caller decodes.
+ */
+export async function getLogsByTopics(
+  client: PublicClient,
+  params: { address: Hex[]; topics: Array<Hex[] | Hex | null>; fromBlock: bigint; toBlock: bigint },
+): Promise<RpcLog[]> {
+  return client.request({
+    method: "eth_getLogs",
+    params: [
+      {
+        address: params.address,
+        topics: params.topics,
+        fromBlock: numberToHex(params.fromBlock),
+        toBlock: numberToHex(params.toBlock),
+      },
+    ],
+  } as never) as Promise<RpcLog[]>;
 }
 
 /** Binary-search the first block with timestamp >= target. */
