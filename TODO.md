@@ -17,9 +17,10 @@ ADRs as you go; `pnpm lint && pnpm typecheck && pnpm test` before "done".
 - [ ] **Install Docker Desktop**, then `docker compose up -d` and switch
       `DATABASE_URL` to the postgres:// form. (PGlite works meanwhile but a
       ~300k-market crawl in PGlite is untested and likely slow.)
-- [ ] **Create a GitHub repo and push** — 6 local commits exist, no remote;
+- [ ] **Create a GitHub repo and push** — local commits only, no remote yet;
       this machine is currently the only copy of the company. CI activates on
-      first push.
+      first push. Do this before anything else — it costs nothing and a disk
+      failure right now loses the entire project.
 
 ## P0 — first full backfill run (agent-executable once keys exist)
 

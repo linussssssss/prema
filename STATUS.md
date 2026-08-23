@@ -168,5 +168,6 @@ pnpm lint && pnpm typecheck && pnpm test     # 44/44 green as of 28efb32
 pnpm db:migrate                              # needs DATABASE_URL
 pnpm dataset:build                           # full run; caps via DATASET_* envs
 ```
-Git: 6 commits on `main`, **no remote yet**. CI workflow exists
+Git: multiple commits on `main`, **no remote yet** (single copy on this
+laptop — pushing is the top P0 in TODO.md). CI workflow exists
 (`.github/workflows/ci.yml`) but has never run (no GitHub repo).
