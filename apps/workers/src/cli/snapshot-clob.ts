@@ -1,7 +1,9 @@
 import { parseArgs } from "node:util";
-import { createDb, databaseUrlFromEnv } from "@verdict/schema";
+import { createDb, databaseUrlFromEnv, loadEnv } from "@verdict/schema";
 import { snapshotTopMarkets } from "../clob/snapshot.ts";
 import { logger } from "../lib/log.ts";
+
+loadEnv();
 
 const { values } = parseArgs({ options: { top: { type: "string", default: "200" } } });
 

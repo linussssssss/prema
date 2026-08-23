@@ -1,7 +1,9 @@
 import { parseArgs } from "node:util";
-import { createDb, databaseUrlFromEnv } from "@verdict/schema";
+import { createDb, databaseUrlFromEnv, loadEnv } from "@verdict/schema";
 import { indexEthereum, indexPolygon } from "../chain/indexer.ts";
 import { logger } from "../lib/log.ts";
+
+loadEnv();
 
 const { values } = parseArgs({
   options: {

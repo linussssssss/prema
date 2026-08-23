@@ -16,7 +16,7 @@
 import { mkdirSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { createDb, databaseUrlFromEnv } from "@verdict/schema";
+import { createDb, databaseUrlFromEnv, loadEnv } from "@verdict/schema";
 import {
   computeLabels,
   indexEthereum,
@@ -27,6 +27,8 @@ import {
 } from "@verdict/workers";
 import { exportAll } from "./exporters.ts";
 import { generateReport, type BuildInfo, type BuildStep } from "./report.ts";
+
+loadEnv();
 
 const dataDir = path.join(path.dirname(fileURLToPath(import.meta.url)), "..");
 const exportsDir = path.join(dataDir, "exports");

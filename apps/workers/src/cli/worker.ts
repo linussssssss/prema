@@ -5,10 +5,12 @@
  * The one-shot dataset build does NOT go through the queue (ADR-0005).
  */
 import { Queue, Worker } from "bullmq";
-import { createDb, databaseUrlFromEnv } from "@verdict/schema";
+import { createDb, databaseUrlFromEnv, loadEnv } from "@verdict/schema";
 import { snapshotTopMarkets } from "../clob/snapshot.ts";
 import { ingestPolymarketMarkets } from "../gamma/ingest.ts";
 import { logger } from "../lib/log.ts";
+
+loadEnv();
 
 const connection = { url: process.env.REDIS_URL ?? "redis://localhost:6379" };
 const QUEUE = "verdict-jobs";

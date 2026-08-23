@@ -1,5 +1,7 @@
 import { createDb, databaseUrlFromEnv } from "../db.ts";
+import { loadEnv } from "../env.ts";
 
+loadEnv();
 const handle = await createDb(databaseUrlFromEnv());
 try {
   await handle.migrate();

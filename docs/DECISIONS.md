@@ -141,3 +141,23 @@ from stored cursors and the 2024-01-01 block boundary.
 **Why:** the dev machine had no Docker and no RPC keys on day 1; the whole
 pipeline still had to run end-to-end on real data without ever pretending the
 result is the full dataset.
+
+---
+
+## ADR-0011 — .env loading + bare-key RPC config (2026-08-23)
+
+**Decision:** `loadEnv()` (in `packages/schema`) loads `.env` into
+process.env without overriding already-set vars, searching cwd → repo root →
+repo parent (the founder's `.env` sits one level above the repo). Every
+entrypoint calls it first. RPC env vars accept either a full https:// URL or
+a **bare API key**; a bare key is expanded to its slot's provider URL
+(primary→Infura, fallback→Alchemy, formats verified 2026-08) via `toRpcUrl()`.
+**Alternatives:** the `dotenv` package (extra dep; we have Node's
+`util.parseEnv`); requiring full URLs (the founder naturally pasted bare
+keys, which the char-length check confirmed match the documented slots);
+loading `.env` as an import side effect (less explicit, breaks inline-env
+override for tests).
+**Why:** nothing loaded `.env` before this (a real gap — the CLIs read
+process.env directly); and the ergonomic thing a user does is paste the key,
+not assemble the URL. Real shell env still wins so inline `DATABASE_URL=…`
+and CI secrets are unaffected.

@@ -19,11 +19,31 @@ const PUBLIC_FALLBACKS: Record<ChainName, string> = {
 
 const CHAINS: Record<ChainName, Chain> = { polygon, ethereum: mainnet };
 
+/**
+ * Accept either a full RPC URL or a bare API key. A bare key is expanded to
+ * the provider URL for its slot per ADR-0002 (primary=Infura, fallback=
+ * Alchemy). Provider URL formats verified 2026-08. If a slot ever uses a
+ * different provider, put the full https:// URL in .env and it's used as-is.
+ */
+export function toRpcUrl(value: string, slot: "primary" | "fallback", chain: ChainName): string {
+  if (value.includes("://")) return value;
+  if (slot === "primary") {
+    return chain === "polygon"
+      ? `https://polygon-mainnet.infura.io/v3/${value}`
+      : `https://mainnet.infura.io/v3/${value}`;
+  }
+  return chain === "polygon"
+    ? `https://polygon-mainnet.g.alchemy.com/v2/${value}`
+    : `https://eth-mainnet.g.alchemy.com/v2/${value}`;
+}
+
 export function rpcUrlsFor(chain: ChainName): string[] {
   const primary = chain === "polygon" ? process.env.POLYGON_RPC_URL : process.env.ETHEREUM_RPC_URL;
   const secondary =
     chain === "polygon" ? process.env.POLYGON_RPC_URL_FALLBACK : process.env.ETHEREUM_RPC_URL_FALLBACK;
-  const urls = [primary, secondary].filter((u): u is string => Boolean(u && u.length > 0));
+  const urls: string[] = [];
+  if (primary && primary.length > 0) urls.push(toRpcUrl(primary, "primary", chain));
+  if (secondary && secondary.length > 0) urls.push(toRpcUrl(secondary, "fallback", chain));
   if (urls.length === 0) {
     logger.warn({ chain }, "no RPC URL configured; using keyless PublicNode fallback (recent blocks only)");
     urls.push(PUBLIC_FALLBACKS[chain]);
