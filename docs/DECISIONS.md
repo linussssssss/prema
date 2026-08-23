@@ -354,3 +354,46 @@ require opposite responses. Retry classification deserves the same scrutiny as
 the happy path, and a provider's documented limits are worth measuring — this
 one had been carried on trust since ADR-0002 and was load-bearing for every
 cost estimate we have made.
+
+---
+
+## ADR-0017 — The managed-oracle dispute collapse is real; keep `disputed` (2026-08-23)
+
+**Decision:** keep `disputed` in the composite label, keep the
+`requester`-filtered OO query as-is, and treat the measured post-migration
+dispute rate as ground truth rather than a symptom.
+
+**Why this was in doubt.** An 11-hour probe found 8,430 managed-oracle
+proposals and zero `DisputePrice`, which looked like the label's primary signal
+had been engineered out from under us. It had not. Sampling 20 windows across
+Jan–Aug 2026 found **27 disputes in 23,898 proposals = 0.113%**, against a
+2.90% plain-OOv2 baseline from 2024 — a ~26x collapse, not an elimination.
+August was simply a quiet window, and a single zero-count sample was too thin
+to extrapolate from.
+
+**Confirmed externally** (`moo-research.md`, this repo): the address is UMA's
+ManagedOptimisticOracleV2 per UMIP-189; `DisputePrice` keeps the identical OOv2
+signature; disputing stays permissionless (only *proposing* is whitelisted);
+and UMA published the effect — disputes down 68% in the first month after
+proposer-whitelist enforcement began **2025-09-05**. Our independently measured
+rate reproduces press figures for 2026 disputed-market counts once NegRisk
+bursts are deduped to distinct markets.
+
+**Consequences.**
+- The sanity gate (~1,000+ disputes Jan–May 2026) should **pass**: two
+  independent measurements — a spread sample (0.18/1k blocks) and a dense
+  June 1–8 sweep (0.191/1k blocks) — extrapolate to ~2,000–2,600. A result far
+  *below* the gate now indicates a code fault, not a changed world.
+- **No OOReporter blind spot today.** Every requester on both `ProposePrice`
+  and `DisputePrice` across 2026 is one of the two V4 adapters we index. Since
+  OOReporter is reportedly rolling out, re-check before each backfill.
+- **Class imbalance replaces scarcity as the modelling problem:** ~3,000
+  positives against 2.6M markets. Evaluate on precision/recall and calibration.
+- **A regime break sits inside the training window.** Enforcement began
+  2025-09-05; `/eval` trains on ≤2025-12-31 and validates on 2026. The label's
+  base rate differs by ~26x across that boundary, so the split must handle it
+  deliberately rather than by accident.
+
+**Lesson:** a zero is a measurement, not a conclusion. The cost of checking was
+~25k credits and a few minutes; the cost of believing it would have been
+re-architecting the label around a problem that does not exist.

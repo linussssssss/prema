@@ -91,6 +91,33 @@ worked, so `resolveManagedOracle()` silently returned null.
       disputes**; for the Jan–May window the gate measures, ~2,600. The gate
       wants ~1,000+. If the full scan comes back far *below* that, it is a
       code problem, not the world — that inversion is now the useful signal.
+      Cross-check: an independent June 1–8 2026 sweep found 73 `DisputePrice`
+      over 381,812 blocks = 0.191/1k blocks, against 0.18/1k from the spread
+      sample — the two agree closely, so the extrapolation is sound. And after
+      deduping NegRisk bursts to distinct markets it lands near the ~1,150
+      disputed markets that press reporting (WSJ, via `moo-research.md`)
+      attributes to 2026 — external corroboration that the pipeline is
+      measuring the same thing the outside world sees.
+- [x] **OOReporter blind spot — CHECKED 2026-08-23, not present.** `moo-research.md`
+      finding 6 warned that a newer Polymarket request path (OOReporter,
+      audited Aug 2026) could route requests through a different `requester`,
+      invisible to our `requester`-filtered OO query. Sampled every
+      `ProposePrice` (15,865) and `DisputePrice` requester on MOOV2 across
+      2026: **100% are the two indexed V4 adapters**, zero unknown addresses,
+      right up to today. Re-check before any future backfill — the research
+      says OOReporter is rolling out, so this can change under us.
+- [ ] **Count disputed *markets*, not dispute events.** The June 2026 sweep
+      found 73 `DisputePrice` in one week, but ~25 of them landed in ~110
+      blocks on `neg_risk_adapter_v4` — one multi-outcome NegRisk group
+      disputed at once. Dedupe by `question_id` before comparing to any
+      external figure or feeding the label.
+- [ ] **Mind the Sept 5 2025 regime break in `/eval`.** The proposer-whitelist
+      enforcement date (`moo-research.md` finding 5) sits *inside* the training
+      window (train ≤ 2025-12-31), while validation is all-2026. So the model
+      would train across two dispute regimes — UMA reports disputes fell 68%
+      at enforcement — and validate only on the post-migration one. Decide
+      deliberately: split at the regime break, weight by era, or restrict
+      training to post-Sept-2025. Do not let this happen by accident.
 - [ ] **Add `QuestionReset` / `QuestionManuallyResolved` as label inputs.**
       21 in the sample, tracking disputes closely but not identically (e.g.
       2026-05-19: 3 disputes, 0 resets; 2026-03-11: 8 and 8). They are
