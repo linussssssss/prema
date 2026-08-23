@@ -7,30 +7,30 @@ facts against docs/live responses before coding; append-only for anything
 decision-relevant; never fabricate report numbers; record new decisions as
 ADRs as you go; `pnpm lint && pnpm typecheck && pnpm test` before "done".
 
-## P0 — unblock the full dataset (founder actions)
+## P0 — unblock the full dataset (founder actions) — DONE 2026-08-23
 
-- [ ] **Create free RPC keys** (≈10 min, €0):
-      Infura/MetaMask Developer Core key at developer.metamask.io (enable
-      Polygon PoS + Ethereum mainnet) → `POLYGON_RPC_URL`,
-      `ETHEREUM_RPC_URL` in `.env`. Alchemy free key → the two `_FALLBACK`
-      URLs. Formats are in `.env.example`. Rationale/limits: ADR-0002.
-- [ ] **Install Docker Desktop**, then `docker compose up -d` and switch
-      `DATABASE_URL` to the postgres:// form. (PGlite works meanwhile but a
-      ~300k-market crawl in PGlite is untested and likely slow.)
-- [ ] **Create a GitHub repo and push** — local commits only, no remote yet;
-      this machine is currently the only copy of the company. CI activates on
-      first push. Do this before anything else — it costs nothing and a disk
-      failure right now loses the entire project.
+- [x] **Free RPC keys** — Infura (primary) + Alchemy (fallback) bare keys in
+      `../.env`; both chains verified with a live getBlockNumber. `.env` is
+      loaded by `loadEnv()` (ADR-0011); bare keys expand to provider URLs.
+- [x] **Docker** — installed; needed `wsl --install` + reboot (firmware virt
+      was already on). `docker compose up -d` runs Postgres/Redis/MinIO;
+      schema migrated into Postgres. Docker CLI is at
+      `%LOCALAPPDATA%\Programs\DockerDesktop\resources\bin\docker.exe` (per-user
+      install, not on PATH by default).
+- [x] **GitHub push** — `origin` = github.com/linussssssss/prema, `main`
+      pushed, CI armed.
 
-## P0 — first full backfill run (agent-executable once keys exist)
+## P0 — first full backfill run (IN PROGRESS 2026-08-23)
 
-- [ ] **Run the full build**: `pnpm db:migrate && pnpm dataset:build` with NO
-      `DATASET_*` caps set. Expectations: Gamma crawl is thousands of pages
-      (~0.5–1s each — hours; it resumes from `ingest_state` if interrupted);
-      Polygon backfill ~40M blocks from the 2024-01-01 boundary (auto-found by
-      block-timestamp bisection) — with Infura's ≤10k-logs-any-range rule the
-      adaptive spans should keep this to tens of thousands of requests, well
-      inside 3M credits/day; Ethereum is trivial (~7M blocks, sparse).
+- [~] **Full build running** on Postgres, uncapped. Gamma closed-pass alone
+      exceeded 400k markets (corpus is ~all 2024+; ~8.7k/page-run skipped as
+      pre-2024). Polygon 40M-block sweep + Ethereum + linter (400k+ versions)
+      + labels + export still to come — expect a multi-hour run. Resumable
+      from `ingest_state` if interrupted. When it finishes, run the validator
+      (next item) BEFORE trusting any number.
+- [ ] **Run `pnpm --filter @verdict/data run validate`** (new this session):
+      prints the dispute sanity gate, the MOOv2 answer, the questionId join
+      rate, and integrity checks; exits nonzero if the gate fails.
 - [ ] **Check the sanity gate**: REPORT.md must show disputes Jan–May 2026 in
       the ~1,000+ range once `index-polygon` is `ok`. The build exits 1 with
       a FAIL line if the gate fails while chain indexing is complete — if so,
