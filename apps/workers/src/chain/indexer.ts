@@ -71,7 +71,14 @@ function ancillaryUtf8(hex: Hex | undefined): string | null {
 export async function resolveManagedOracle(client: PublicClient): Promise<string | null> {
   if (process.env.MOOV2_ADDRESS) return process.env.MOOV2_ADDRESS.toLowerCase();
   const candidates = new Set<string>();
-  for (const adapter of [POLYGON_CONTRACTS.ctfAdapterV3, POLYGON_CONTRACTS.negRiskAdapter]) {
+  // Probe the *current* (V4) adapters first — they resolve most markets and
+  // point at today's live oracle; older adapters may still point at OOv2.
+  for (const adapter of [
+    POLYGON_CONTRACTS.ctfAdapterV4,
+    POLYGON_CONTRACTS.negRiskAdapterV4,
+    POLYGON_CONTRACTS.ctfAdapterV3,
+    POLYGON_CONTRACTS.negRiskAdapter,
+  ]) {
     try {
       const oracle = await client.readContract({
         address: adapter as Hex,

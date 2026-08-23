@@ -161,3 +161,36 @@ override for tests).
 process.env directly); and the ergonomic thing a user does is paste the key,
 not assemble the URL. Real shell env still wins so inline `DATABASE_URL=…`
 and CI secrets are unaffected.
+
+---
+
+## ADR-0012 — Add V4 CTF adapters after resolver-distribution finding (2026-08-23)
+
+**Decision:** Add `ctfAdapterV4` (`0x65070be9…`) and `negRiskAdapterV4`
+(`0x69c47De9…`) to the indexed adapter set, and probe them first in
+`resolveManagedOracle()`. Register `umaSportsOracle` (`0xB21182D0…`) for
+labeling but **defer** indexing its multi-outcome sports mechanism (it uses a
+`MULTIPLE_VALUES` identifier, not `YES_OR_NO_QUERY`; ~5.7k sports markets,
+outside the ambiguous-tail focus).
+**How it was found:** after the first full Gamma crawl (2.62M markets), the
+`markets.resolved_by` distribution showed the two dominant resolvers
+(1.48M + 0.40M markets ≈ 72% of the corpus) were **not** the v1/v2/v3 +
+old-NegRisk addresses taken from Polymarket's docs — they are newer **V4**
+adapters (verified via Polygonscan public name tags). Category breakdown
+showed the V4 adapters carry a large share of the ambiguous tail (~15.8k
+Politics, plus Midterms/Finance/Culture), so indexing only the old adapters
+would have produced a materially incomplete, biased dispute dataset and a
+meaningless sanity gate.
+**Consequence:** the first Polygon indexing run (only old adapters, ~23%
+through blocks, ~28k events) was stopped; chain cursors reset; chain phase
+re-run from the 2024 boundary with the full adapter set. Gamma data was
+untouched (2.62M markets already committed). resolution_events dedupe on
+`(chain, tx_hash, log_index)`, so the partial run's rows are retained, not
+duplicated.
+**Alternatives:** let the incomplete run finish and note the gap in REPORT.md
+(rejected — the founding brief says stop and flag when numbers will be wildly
+off); try to enumerate every historical adapter up front (we did, from docs —
+the docs were stale, which is exactly why on-chain `resolved_by` is the
+ground truth and the linter/verify step caught it).
+**Lesson:** verify contract sets against on-chain reality (resolved_by), not
+documentation — docs lag deployments.
