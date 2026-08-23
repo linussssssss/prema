@@ -337,44 +337,48 @@ Show a small mono summary ("3 flags · 2 high"). Include a row of three sample
 buttons that load the samples. Keep everything in `lib/linter.ts` as pure
 functions so it is easy to extend.
 
-Implement these rule families client-side (faithful to Prema's real linter):
-- **hedge-words** (medium): flag any of `credible, widely reported,
-  significant, significantly, official, officially, substantial, confirmed,
-  announced, effectively, widely` (case-insensitive, word-boundary).
-- **deadline-no-timezone** (high): flag a deadline phrase (`by|before|through|
-  until|on or before|no later than` followed by a month-name date, a
-  `YYYY-MM-DD`, an `M/D`, `end of <month/year>`, or a bare 4-digit year) when
-  the text contains no timezone token (`ET, EST, EDT, CT, CST, PT, PST, UTC,
-  GMT, CET`, or `eastern/pacific/central time`). If a timezone exists but no
-  explicit boundary (`11:59`, `midnight`, `end of day`, `on or before`,
-  `inclusive`), downgrade to medium.
-- **status-verb-gap** (high): flag any of `leave office, leaves office, step
-  down, steps down, resign, resigns, cease operations, launch, launches,
-  release, releases, approve, approves, sign, signs, remain in office, remains
-  in office` unless the text also contains an edge-case marker (`for any
-  reason, or otherwise, interim, acting, temporar, death, dies, incapacit,
-  regardless of, even if, partial, delayed`).
-- **vague-source** (medium): if the text contains a source cue (`resolution
-  source, resolve according to, resolved based on, as reported by, consensus
-  of`) but no URL and no bare domain (`something.com/org/net/gov/io`), flag it.
-- **no-na-condition** (low/info): if the text contains none of `50-50, 50/50,
-  n/a, invalid, cancel, void, annul, unable to determine, in the event of
-  ambiguity, refund`, flag it.
+**Vendor Prema's real linter verbatim — do not reimplement.** Copy
+`packages/linter/src/index.ts` and `wordlists.json` from the Prema repo into
+`lib/linter.ts`; it is already pure, dependency-free, browser-safe TypeScript
+(no `fs`/`crypto`/`process`), so the demo output is *identical to production* —
+which is exactly what the on-page caption claims. Pin the copied version and
+note in a comment that it may drift from the source repo. Two of the seven
+rules read `LintContext` a bare textarea can't supply: `outcomes-not-exhaustive`
+needs an outcomes list and `vague-source` reads a venue resolution-source
+field. Either add optional "outcomes" (comma-separated) and "resolution source"
+inputs to exercise them, or accept that those two won't fire on free text
+(fine). The seven families it runs, for reference:
+1. **hedge-words** (medium) — subjective threshold words.
+2. **deadline-no-timezone** (high; medium if a timezone is present but no
+   inclusive/exclusive boundary) — a deadline the reader can't pin to an instant.
+3. **occurrence-vs-reporting** (high) — a deadline plus a lagging source (court
+   records, filings, official statistics) with no "must occur by / as reported
+   by" disambiguation.
+4. **status-verb-gap** (high) — a status-change verb with no enumerated edge cases.
+5. **vague-source** (medium) — a source clause with no specific feed/page.
+6. **outcomes-not-exhaustive** (medium) — >2 outcomes with no "Other"/N/A.
+7. **no-na-condition** (info) — no N/A / invalidity provision at all.
 
-Three sample inputs (load via buttons; these are illustrative, not real
-markets):
-1. "This market resolves Yes if the CEO steps down before May 31, 2026,
-   according to credible reporting." — expect: hedge-words, deadline-no-timezone,
-   status-verb-gap, vague-source, no-na-condition.
-2. "Resolves Yes if the merger closes by Q4 2026, per the company's official
-   filing; otherwise No." — expect: deadline-no-timezone (Q4/year with no tz),
-   hedge-words (official), and (optionally) an occurrence-vs-reporting note.
+Three sample inputs (load via buttons; illustrative, not real markets). Each
+flag list below was **verified by running the real linter** — do not alter the
+wordings without re-verifying, because the demo's honesty depends on it:
+1. "This market resolves Yes if the CEO steps down before May 31, 2026. The
+   resolution source will be a consensus of credible reporting." → flags:
+   deadline-no-timezone, hedge-words, status-verb-gap, vague-source,
+   no-na-condition.
+2. "Resolves Yes if the company files for bankruptcy by June 30, 2026, per its
+   official court filing; otherwise No." → flags: deadline-no-timezone,
+   occurrence-vs-reporting, hedge-words, no-na-condition. (Shows the subtle
+   occurrence-vs-reporting rule: the event must happen by a date, but a court
+   filing publishes on a lag.)
 3. "Resolves Yes if BTC's closing price on Coinbase at 2026-12-31 23:59:59 UTC
    is above $150,000; No otherwise; N/A if Coinbase halts spot trading that
-   day." — expect: no high flags (the contrast case).
+   day." → flags: none (the clean contrast case: explicit instant, timezone,
+   concrete source, and an N/A condition).
 
-Above the demo, a one-line honest note that this is a preview and the
-production linter is calibrated against real outcomes.
+Above the demo, a one-line honest note that this is Prema's actual linter
+running client-side, and that the production score is calibrated against real
+dispute outcomes.
 
 ## 5. Waitlist backend (`functions/api/subscribe.ts`)
 
