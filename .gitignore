@@ -27,3 +27,4 @@ contracts/broadcast/
 
 # misc
 .DS_Store
+data/postmortems/

@@ -5,7 +5,8 @@
   "scripts": {
     "typecheck": "tsc --noEmit",
     "dataset:build": "tsx src/build.ts",
-    "validate": "tsx src/validate.ts"
+    "validate": "tsx src/validate.ts",
+    "postmortem": "tsx src/postmortem.ts"
   },
   "dependencies": {
     "@dsnp/parquetjs": "^1.8.0",
