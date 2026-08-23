@@ -127,6 +127,12 @@ export interface LogRange {
   toBlock: bigint;
 }
 
+/** viem surfaces a 429 as the generic "HTTP request failed", so match the
+ *  status and the provider wordings rather than the wrapper text. */
+const RATE_LIMITED = /\b429\b|too many requests|rate limit|throttl/i;
+
+const sleep = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
+
 /**
  * Run `fetch` over [fromBlock, toBlock] in adaptive chunks: start at
  * `initialSpan`, halve on provider range/size errors (Infura's 10k-log cap and
@@ -150,15 +156,21 @@ export async function forEachAdaptiveRange(
     label?: string;
     /** Clean chunks before the learned ceiling relaxes upward. */
     relaxAfter?: number;
+    /** First rate-limit backoff; doubles per consecutive hit. */
+    backoffMs?: number;
+    maxRateLimitRetries?: number;
   },
   fetchChunk: (chunk: LogRange) => Promise<void>,
 ): Promise<void> {
   const minSpan = opts.minSpan ?? 128n;
   const maxSpan = opts.maxSpan ?? opts.initialSpan * 8n;
   const relaxAfter = opts.relaxAfter ?? 16;
+  const backoffMs = opts.backoffMs ?? 2_000;
+  const maxRateLimitRetries = opts.maxRateLimitRetries ?? 8;
   let span = opts.initialSpan;
   let ceiling: bigint | null = null;
   let streak = 0;
+  let rateLimitHits = 0;
   let from = range.fromBlock;
   while (from <= range.toBlock) {
     const to = from + span - 1n > range.toBlock ? range.toBlock : from + span - 1n;
@@ -166,6 +178,7 @@ export async function forEachAdaptiveRange(
       await fetchChunk({ fromBlock: from, toBlock: to });
       from = to + 1n;
       streak += 1;
+      rateLimitHits = 0; // fresh backoff budget for the next throttle
       if (ceiling !== null && streak >= relaxAfter) {
         ceiling = (ceiling * 5n) / 4n;
         streak = 0;
@@ -178,12 +191,28 @@ export async function forEachAdaptiveRange(
       span = next;
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
+      // A rate limit is NOT a range problem, and shrinking on one makes it
+      // strictly worse: smaller chunks mean more requests mean more throttling.
+      // Observed as a death spiral (2929 -> 128 blocks, then failure) because
+      // viem reports a 429 as the generic "HTTP request failed". Back off in
+      // time and retry the same span instead.
+      if (RATE_LIMITED.test(msg)) {
+        if (rateLimitHits >= maxRateLimitRetries) throw err;
+        const waitMs = backoffMs * 2 ** rateLimitHits;
+        rateLimitHits += 1;
+        logger.warn(
+          { label: opts.label, waitMs, attempt: rateLimitHits, span: span.toString() },
+          "rate limited; backing off without shrinking",
+        );
+        await sleep(waitMs);
+        continue;
+      }
       // Providers disagree on how a too-big getLogs reads: Infura says
       // "more than 10000 results", others say "block range", PublicNode
-      // returns a bare InvalidParams. Treat them all as shrinkable.
-      const rangeError = /10000|10,000|range|too large|response size|limit|timeout|more than|invalid param|request failed/i.test(
-        msg,
-      );
+      // returns a bare InvalidParams. Treat them all as shrinkable. Kept
+      // deliberately narrow — a transient network failure must not be read as
+      // a range error, or it would poison `ceiling` for the rest of the run.
+      const rangeError = /10000|10,000|range|too large|response size|limit|timeout|more than|invalid param/i.test(msg);
       if (!rangeError || span <= minSpan) throw err;
       ceiling = span;
       streak = 0;

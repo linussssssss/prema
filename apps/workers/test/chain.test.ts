@@ -93,6 +93,43 @@ describe("forEachAdaptiveRange", () => {
     expect(spans.at(-1)!).toBeGreaterThan(10_000n);
   });
 
+  it("backs off on rate limits without shrinking the span", async () => {
+    // A 429 reaches us as viem's generic "HTTP request failed", which used to
+    // match the range-error pattern. Shrinking then multiplies the request
+    // count and deepens the throttling — observed as a 2929->128 death spiral
+    // against Infura on 2026-08-23.
+    const spans: bigint[] = [];
+    let throttled = 0;
+    await forEachAdaptiveRange(
+      { fromBlock: 0n, toBlock: 999n },
+      { initialSpan: 500n, minSpan: 64n, backoffMs: 1 },
+      async (c) => {
+        if (throttled < 2) {
+          throttled += 1;
+          throw new Error(
+            'HTTP request failed.\n\nStatus: 429\nURL: https://polygon-mainnet.infura.io/v3/x\n\nDetails: Too Many Requests',
+          );
+        }
+        spans.push(c.toBlock - c.fromBlock + 1n);
+      },
+    );
+    expect(throttled).toBe(2);
+    expect(spans[0]).toBe(500n); // retried at the same width, not halved
+    expect(spans.reduce((a, b) => a + b, 0n)).toBe(1000n);
+  });
+
+  it("gives up after repeated rate limits rather than looping forever", async () => {
+    await expect(
+      forEachAdaptiveRange(
+        { fromBlock: 0n, toBlock: 99n },
+        { initialSpan: 100n, backoffMs: 1, maxRateLimitRetries: 3 },
+        async () => {
+          throw new Error("Status: 429 Too Many Requests");
+        },
+      ),
+    ).rejects.toThrow("429");
+  });
+
   it("rethrows non-range errors", async () => {
     await expect(
       forEachAdaptiveRange({ fromBlock: 0n, toBlock: 9n }, { initialSpan: 10n }, async () => {

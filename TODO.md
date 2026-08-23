@@ -76,17 +76,29 @@ worked, so `resolveManagedOracle()` silently returned null.
       whitelisted proposer addresses are also a fingerprint: if recent
       ProposePrice proposers ⊆ that list, managed mode is de facto active
       even on the OOv2 contract.
-- [ ] **Watch the MOOv2 dispute rate on the re-scan.** An 11-hour probe window
-      (2026-08-23, blocks ~92.51–92.53M) captured 8,430 MOOv2 `ProposePrice`
-      and 6,881 `Settle` but **zero `DisputePrice`**. Note the decode path
-      itself is proven — the live DB holds 198 real `DisputePrice` rows from
-      the pre-V4 sweep, on plain OOv2 — so what is unobserved is specifically
-      a dispute *on the managed oracle*. Zero is consistent with disputes
-      being rare (~7/day predicts ~3 in that window, so 0 is ~5% likely). If
-      the full scan also yields ~0 MOOv2 disputes, suspect the
-      `requester`-filtered OO query or MOOv2 routing disputes through a
-      different event; compare against a known dispute on Polygonscan before
-      trusting any number.
+- [x] **MOOv2 dispute rate — MEASURED 2026-08-23. Disputes exist; the label
+      survives.** Sampled 20 windows x 7,500 blocks across Jan–Aug 2026
+      (100 calls, ~25k credits): **23,898 managed-oracle proposals, 27
+      disputes = 0.113%**, spread across the whole year, plus 12 plain-OOv2
+      disputes and 21 V4 `QuestionReset`/`QuestionManuallyResolved`. So the
+      managed oracle suppresses disputes ~26x versus the 2024 OOv2 baseline
+      of 2.90% — real suppression, **not** elimination. The earlier "zero
+      disputes, signal may be dead" alarm came from one quiet 11-hour August
+      window and was wrong. Sample tx hashes are in the session log for
+      Polygonscan spot-checks.
+- [ ] **Expect the sanity gate to PASS.** Extrapolating the sampled rate over
+      Jan 1–Aug 23 2026 (11.48M blocks) gives **~2,070 MOOv2 + ~920 OOv2
+      disputes**; for the Jan–May window the gate measures, ~2,600. The gate
+      wants ~1,000+. If the full scan comes back far *below* that, it is a
+      code problem, not the world — that inversion is now the useful signal.
+- [ ] **Add `QuestionReset` / `QuestionManuallyResolved` as label inputs.**
+      21 in the sample, tracking disputes closely but not identically (e.g.
+      2026-05-19: 3 disputes, 0 resets; 2026-03-11: 8 and 8). They are
+      adapter-level, so they survive future oracle migrations — worth having
+      as a component that does not depend on UMA's dispute policy.
+- [ ] **Plan for 0.1% class imbalance.** ~3,000 positives against ~2.6M
+      markets. Evaluate with precision/recall and calibration, never
+      accuracy; consider case-control sampling for training.
 
 ## P1 — Phase 0 hardening (before anything is shown publicly)
 

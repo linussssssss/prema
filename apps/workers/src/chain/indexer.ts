@@ -29,14 +29,20 @@ const CONFIRMATIONS: Record<ChainName, bigint> = { polygon: 300n, ethereum: 32n 
  * 50,000 blocks hopeless in the dense recent ranges — the 2026-08-23 probe
  * burned four failed halvings (50k→25k→12.5k→6.25k) before its first success
  * at ~3k, and every one of those was a paid request that could not succeed.
- * Ethereum's VotingV2 YES_OR_NO_QUERY traffic is sparse, so it still opens
- * wide. Both grow toward MAX_SPAN from here (ADR-0015).
+ * Ethereum's VotingV2 YES_OR_NO_QUERY traffic is sparse, so it opens straight
+ * at the provider cap. Both grow toward MAX_SPAN from here (ADR-0015/0016).
  */
-const INITIAL_SPAN: Record<ChainName, bigint> = { polygon: 4_000n, ethereum: 50_000n };
-/** Explicit, because forEachAdaptiveRange otherwise derives it as
- *  initialSpan*8 — lowering the initial span would then quietly cut the sweep's
- *  reach in the sparse 2024 ranges, where wide chunks are the whole win. */
-const MAX_SPAN: Record<ChainName, bigint> = { polygon: 400_000n, ethereum: 400_000n };
+const INITIAL_SPAN: Record<ChainName, bigint> = { polygon: 4_000n, ethereum: 10_000n };
+/**
+ * Explicit, because forEachAdaptiveRange otherwise derives it as initialSpan*8.
+ * 10,000 is Infura's hard `eth_getLogs` block-range cap, measured 2026-08-23:
+ * a near-empty query (one event, one address) still returned InvalidParams at
+ * 15,625 blocks and succeeded at 7,812. This corrects ADR-0002's reading that
+ * any range is allowed below 10k logs — the block cap applies regardless of
+ * how few logs come back, and it is the floor under the whole sweep's cost.
+ * Anything above this is unreachable, so probing higher only wastes calls.
+ */
+const MAX_SPAN: Record<ChainName, bigint> = { polygon: 10_000n, ethereum: 10_000n };
 
 const YES_OR_NO_IDENTIFIER = stringToHex("YES_OR_NO_QUERY", { size: 32 });
 

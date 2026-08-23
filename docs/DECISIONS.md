@@ -313,3 +313,44 @@ drops events, and it needs mainnet verification before it can be trusted.
 **Honesty note:** these are estimates from one 20k-block probe in the densest
 part of the chain. The real sweep spans 40M blocks of wildly varying density;
 treat the projected savings as a direction, not a number.
+
+---
+
+## ADR-0016 — Rate limits are not range errors; Infura caps getLogs at 10k blocks (2026-08-23)
+
+**Decision:** `forEachAdaptiveRange` classifies a rate limit separately from a
+range error: on 429 it waits (2s, doubling, 8 attempts) and retries the *same*
+span; only genuine range/size errors shrink the span. `MAX_SPAN` drops to
+10,000 blocks on both chains.
+
+**The bug.** viem surfaces an HTTP 429 as the generic `HTTP request failed`,
+which matched `request failed` in the shrink pattern. So the sweep answered
+throttling by halving the span — which multiplies the request count, which
+deepens the throttling. Observed live against Infura on 2026-08-23 as a death
+spiral: 2929 → 2196 → 1921 → 1681 → 1470 → 1102 → 482 → 361 → 270 → 135 → 128
+blocks, then hard failure. The shrink pattern was also narrowed (dropping the
+catch-all `request failed`) because with ADR-0015's learned `ceiling`, a
+transient network error would otherwise poison the ceiling for the whole run —
+the new memory made the old over-broad matching more dangerous than it was.
+
+**The measurement that corrects ADR-0002.** ADR-0002 recorded Infura as
+accepting *any* block range so long as the response stays under 10k logs. That
+is wrong. A deliberately near-empty query — one event signature, one address,
+single-digit results — still returned InvalidParams at 15,625 blocks and
+succeeded at 7,812. The block-range cap applies regardless of result size, and
+10,000 is the evident limit.
+
+**Cost consequence — this supersedes the revision in RECOVERY.md 0.3.** The cap
+puts a floor under the sweep that no tuning removes: 40.7M blocks ÷ 10k = ~4,070
+chunks minimum, × 5 getLogs = ~20,350 calls ≈ **~5.2M credits ≈ ~2 free-tier
+days**. My earlier revision to "~1.3M credits, inside one free day" assumed
+400k-block chunks the provider will not serve, and was wrong; the original
+~8M/3-day estimate was closer. ADR-0015's tunings still hold — they reduce
+wasted probes and let dense ranges use the full 10k — but they cannot beat the
+floor. `MAX_SPAN` above 10,000 is unreachable and only wastes the probe.
+
+**Lesson:** two failures that look alike in the log ("the request failed") can
+require opposite responses. Retry classification deserves the same scrutiny as
+the happy path, and a provider's documented limits are worth measuring — this
+one had been carried on trust since ADR-0002 and was load-bearing for every
+cost estimate we have made.

@@ -45,22 +45,19 @@ public-name tags (cited in config.ts).
 pnpm --filter @verdict/workers run ingest:chain -- --reset-cursor --chain polygon
 DATASET_SKIP_GAMMA=1 pnpm dataset:build      # chain + linter + labels + export
 ```
-- **Credit reality — revised 2026-08-23, the ~8M/3-day figure was pessimistic.**
-  That estimate applied dense-region chunk sizes to all 40.7M blocks. Two
-  measurements say density varies ~400x across the sweep: the Aug-2026 probe
-  saw 1.275 logs/block, while the dead 2024 sweep saw 0.0031 (31,573 events
-  over 10.15M blocks). Modelling growth between them puts the whole sweep at
-  **~8–13M logs ≈ ~1.3M Infura credits**, i.e. plausibly **inside a single
-  free day**. Treat as an estimate with ~5x error bars either way — but note
-  it is bounded: 3M credits/day is a *ceiling*, so the worst case is more
-  days, never a bill.
-- **The real constraint is data, not credits.** ~10M logs at the measured
-  ~1.3 KB/log is **~10–17 GB** of JSON to pull, parse and insert. Expect a
-  few hours of wall-clock whatever the provider, and keep the machine awake
-  (the exit-127 cause).
-- **Measure instead of guessing:** watch the Infura dashboard for the first
-  hour of the real run. Credits burned per 1M blocks there settles this
-  properly, and the run is resumable, so there is no cost to finding out.
+- **Credit reality — settled 2026-08-23 by measurement: ~5.2M credits, ~2
+  free-tier days.** Infura caps `eth_getLogs` at **10,000 blocks regardless of
+  result size** (measured: a near-empty query failed at 15,625 blocks and
+  succeeded at 7,812). ADR-0002 had recorded "any range under 10k logs", which
+  was wrong, and every cost estimate rested on it. The cap is a hard floor:
+  40.7M blocks ÷ 10k = ~4,070 chunks × 5 getLogs ≈ 20,350 calls ≈ 5.2M
+  credits. ADR-0015's tunings reduce wasted probes but cannot beat the floor.
+  (An intermediate revision here claiming ~1.3M credits / one day was wrong —
+  it assumed 400k-block chunks Infura will not serve. See ADR-0016.)
+- **Also real: ~10–17 GB** of JSON to pull, parse and insert (~10M logs at the
+  measured ~1.3 KB/log). Keep the machine awake (the exit-127 cause).
+- Worst case is bounded: 3M credits/day is a ceiling, so overrunning costs
+  more days, never a bill. It is resumable across days at no extra cost.
 - **Ways to fit sooner (pick one, ask before spending):**
   (a) spread over days — free, default, just re-run daily;
   (b) fewer-getLogs optimization — combine the 3 OO event calls into 1 via
