@@ -196,7 +196,7 @@ const TRANSIENT_NETWORK = /ENOTFOUND|EAI_AGAIN|ECONNRESET|ECONNREFUSED|ETIMEDOUT
  * 2026-08-24), which is what prompted the inversion below.
  */
 const SERVER_TRANSIENT =
-  /service (temporarily )?unavailable|temporarily unavailable|bad gateway|gateway time-?out|status:\s*50[0234]\b|-32603/i;
+  /service (temporarily )?unavailable|temporarily unavailable|bad gateway|gateway time-?out|status:\s*50[0234]\b|-32603|internal error/i;
 
 /** Providers disagree on how a too-big getLogs reads: Infura says "more than
  *  10000 results", others say "block range", PublicNode returns a bare
@@ -252,6 +252,8 @@ export async function forEachAdaptiveRange(
     /** Consecutive UNRECOGNISED errors tolerated before giving up. Low by
      *  design: a deterministic failure exhausts it in seconds. */
     maxUnknownRetries?: number;
+    /** Provider failures at one width before shrinking as well as waiting. */
+    shrinkAfterNetworkHits?: number;
   },
   fetchChunk: (chunk: LogRange) => Promise<void>,
 ): Promise<void> {
@@ -262,6 +264,7 @@ export async function forEachAdaptiveRange(
   const maxRateLimitRetries = opts.maxRateLimitRetries ?? 8;
   const maxNetworkRetries = opts.maxNetworkRetries ?? 40;
   const maxUnknownRetries = opts.maxUnknownRetries ?? 5;
+  const shrinkAfterNetworkHits = opts.shrinkAfterNetworkHits ?? 3;
   let span = opts.initialSpan;
   let ceiling: bigint | null = null;
   let streak = 0;
@@ -316,9 +319,25 @@ export async function forEachAdaptiveRange(
         // failing a run that is hours in and fully resumable.
         const waitMs = Math.min(backoffMs * 2 ** networkHits, 300_000);
         networkHits += 1;
+
+        // After a few failures at the same width, shrink as well as wait. A
+        // provider returning a *generic* internal error (Infura's -32603) is
+        // ambiguous: it can mean "busy, come back later", which waiting fixes,
+        // or "that query was too heavy to answer", which only a smaller range
+        // fixes. Doing both covers each case; waiting alone would spin for
+        // hours on a query that can never succeed at this size. Observed live
+        // at block ~82.85M on 2026-08-24.
+        const shrinking = networkHits > shrinkAfterNetworkHits && span > minSpan;
+        if (shrinking) {
+          ceiling = span;
+          streak = 0;
+          span = span / 2n < minSpan ? minSpan : span / 2n;
+        }
         logger.warn(
-          { label: opts.label, waitMs, attempt: networkHits, err: msg.slice(0, 120) },
-          "network unavailable; waiting for it to come back",
+          { label: opts.label, waitMs, attempt: networkHits, span: span.toString(), shrinking, err: msg.slice(0, 120) },
+          shrinking
+            ? "provider still failing; waiting AND shrinking in case the query is too heavy"
+            : "network or provider unavailable; waiting for it to come back",
         );
         await sleep(waitMs);
         continue;

@@ -240,6 +240,26 @@ describe("forEachAdaptiveRange", () => {
     expect(spans.reduce((a, b) => a + b, 0n)).toBe(1000n);
   });
 
+  it("escalates to shrinking when a provider keeps failing at one width", async () => {
+    // Infura's generic internal error is ambiguous: "busy, come back later"
+    // (waiting fixes it) or "that query was too heavy" (only a smaller range
+    // does). Waiting alone would spin for hours on the second case. Observed
+    // live at block ~82.85M on 2026-08-24.
+    const widths: bigint[] = [];
+    await forEachAdaptiveRange(
+      { fromBlock: 0n, toBlock: 999n },
+      { initialSpan: 1000n, minSpan: 32n, backoffMs: 1, shrinkAfterNetworkHits: 2 },
+      async (c) => {
+        const w = c.toBlock - c.fromBlock + 1n;
+        widths.push(w);
+        // Only a genuinely smaller query succeeds — waiting never would.
+        if (w > 250n) throw new Error("An internal error was received.\n\nURL: https://polygon-mainnet.infura.io/v3/x");
+      },
+    );
+    // It must have reached a width that works rather than retrying 1000 forever.
+    expect(widths.some((w) => w <= 250n)).toBe(true);
+  });
+
   it("retries an UNRECOGNISED error instead of dying", async () => {
     // The inversion (ADR-0021). Three unrecognised errors killed three
     // multi-hour resumable sweeps in two days — a 429, an ENOTFOUND, a viem
