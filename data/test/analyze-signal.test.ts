@@ -130,6 +130,79 @@ describe("analyzeSignal", () => {
     expect(r.byDecile.find((d) => d.decile === 10)!.contested).toBe(0);
   });
 
+  it("separates composition from signal (Simpson's paradox)", async () => {
+    // A rule with NO within-category effect, made to look strong by composition
+    // alone — the exact failure that made status-verb-gap read 20.66x pooled
+    // and 1.08x within Politics on 2026-08-24.
+    //
+    //   Politics: 40 markets, 50% dispute rate, rule fires on all of them
+    //   Sports:   40 markets,  0% dispute rate, rule fires on none
+    //
+    // Within each category the rule is worth exactly nothing. Pooled it looks
+    // decisive, because it perfectly tracks which category a market is in.
+    const h = await createDb("pglite://memory");
+    await h.migrate();
+    await h.db.insert(venues).values({ id: "polymarket", name: "Polymarket", kind: "onchain" });
+    for (let i = 0; i < 80; i++) {
+      const politics = i < 40;
+      const id = `polymarket:s${i}`;
+      await h.db.insert(markets).values({
+        id,
+        venueId: "polymarket",
+        externalId: `s${i}`,
+        question: `q${i}`,
+        category: politics ? "Politics" : "Sports",
+        volumeUsd: String(1000 + i),
+        closed: true,
+        capturedAt: new Date(),
+      });
+      const [v] = await h.db
+        .insert(rulesVersions)
+        .values({
+          marketId: id,
+          versionNum: 1,
+          textHash: `h${i}`,
+          rulesText: "t",
+          source: "gamma_description",
+          capturedAt: new Date(),
+        })
+        .returning({ id: rulesVersions.id });
+      if (politics) {
+        await h.db.insert(linterHits).values({
+          rulesVersionId: v!.id,
+          ruleId: "hedge-words",
+          severity: "warn",
+          spanStart: 0,
+          spanEnd: 1,
+          message: "m",
+          linterVersion: "linter-v1.1.0",
+          capturedAt: new Date(),
+        });
+      }
+      const disputed = politics && i % 2 === 0;
+      await h.db.insert(ambiguityLabels).values({
+        marketId: id,
+        disputed,
+        escalated: false,
+        resolvedNa: false,
+        rulesEditedAfterListing: false,
+        contested: disputed,
+        labelVersion: "label-v1",
+        computedAt: new Date(),
+      });
+    }
+
+    const r = (await analyzeSignal(h.db))!;
+    const hedge = r.byRuleDisputed.find((x) => x.rule === "hedge-words")!;
+    // Pooled: every disputed market fired, none of the non-firing ones did.
+    expect(hedge.lift).toBeNull(); // no disputes among not-fired → ratio undefined
+    // Stratified: within Politics the rule fires on everything so it has no
+    // comparison group, and Sports has no disputes. The estimator must not
+    // invent an effect from composition.
+    expect(hedge.liftStratified).toBeNull();
+    await h.close();
+  });
+
   it("returns null when nothing is labelled", async () => {
     const empty = await createDb("pglite://memory");
     await empty.migrate();

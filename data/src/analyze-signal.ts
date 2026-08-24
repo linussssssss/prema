@@ -39,8 +39,52 @@ export interface RuleLift {
   firedContested: number;
   notFired: number;
   notFiredContested: number;
-  /** null when the comparison group has no contested markets to divide by. */
+  /** Pooled across the whole corpus. Confounded by category — see below. */
   lift: number | null;
+  /**
+   * Mantel-Haenszel risk ratio stratified by category — the same comparison
+   * made *within* each category and then pooled, so composition cannot
+   * manufacture it.
+   *
+   * This exists because the pooled number is misleading by default here.
+   * Sports is 1.38M of 2.6M markets and almost never disputes; Politics and
+   * Crypto dispute far more. Any rule that fires more on Politics than Sports
+   * inherits that gap for free. Measured 2026-08-24: `status-verb-gap` reads
+   * 20.66x pooled and **1.08x within Politics**. A large gap between the two
+   * columns means the pooled figure is composition, not signal.
+   */
+  liftStratified: number | null;
+  /** Strata contributing to the MH estimate. */
+  strata: number;
+}
+
+interface StratumRow {
+  stratum: string;
+  fired: number;
+  fired_t: number;
+  notfired: number;
+  notfired_t: number;
+}
+
+/**
+ * Mantel-Haenszel pooled risk ratio. Each stratum contributes in proportion to
+ * its size, so a huge low-rate stratum cannot drag the estimate the way it does
+ * in a naive pooled ratio.
+ */
+function mantelHaenszel(rows: StratumRow[]): { rr: number | null; strata: number } {
+  let num = 0;
+  let den = 0;
+  let used = 0;
+  for (const r of rows) {
+    const n1 = r.fired;
+    const n0 = r.notfired;
+    const N = n1 + n0;
+    if (N === 0 || n1 === 0 || n0 === 0) continue;
+    num += (r.fired_t * n0) / N;
+    den += (r.notfired_t * n1) / N;
+    used += 1;
+  }
+  return { rr: den > 0 ? num / den : null, strata: used };
 }
 
 export interface SignalReport {
@@ -67,6 +111,7 @@ const BASE = sql`
   ),
   base as (
     select m.id,
+           m.category,
            ntile(10) over (order by m.volume_usd::double precision nulls first) as decile,
            l.contested,
            l.disputed,
@@ -92,11 +137,13 @@ async function liftFor(
   target: Target = "contested",
 ): Promise<RuleLift> {
   const col = target === "disputed" ? sql`disputed` : sql`contested`;
-  const [r] = rowsOf<{ fired: number; fired_c: number; notfired: number; notfired_c: number }>(
+  // One query per rule returning per-category strata: the pooled figure is the
+  // column sums, the stratified one is Mantel-Haenszel over the same rows.
+  const strata = rowsOf<StratumRow>(
     await db.execute(sql`
       ${BASE},
       flagged as (
-        select b.*, exists(
+        select b.*, coalesce(b.category, '(none)') as stratum, exists(
           select 1 from linter_hits lh
           where lh.rules_version_id = b.rules_version_id and lh.rule_id = ${rule}
         ) as fired
@@ -104,19 +151,37 @@ async function liftFor(
         where b.rules_version_id is not null
           ${topDecileOnly ? sql`and b.decile = 10` : sql``}
       )
-      select count(*) filter (where fired)::int as fired,
-             count(*) filter (where fired and ${col})::int as fired_c,
+      select stratum,
+             count(*) filter (where fired)::int as fired,
+             count(*) filter (where fired and ${col})::int as fired_t,
              count(*) filter (where not fired)::int as notfired,
-             count(*) filter (where not fired and ${col})::int as notfired_c
-      from flagged`),
-  );
-  const fired = r?.fired ?? 0;
-  const firedContested = r?.fired_c ?? 0;
-  const notFired = r?.notfired ?? 0;
-  const notFiredContested = r?.notfired_c ?? 0;
+             count(*) filter (where not fired and ${col})::int as notfired_t
+      from flagged group by stratum`),
+  ).map((r) => ({
+    stratum: String(r.stratum),
+    fired: Number(r.fired),
+    fired_t: Number(r.fired_t),
+    notfired: Number(r.notfired),
+    notfired_t: Number(r.notfired_t),
+  }));
+
+  const fired = strata.reduce((a, r) => a + r.fired, 0);
+  const firedContested = strata.reduce((a, r) => a + r.fired_t, 0);
+  const notFired = strata.reduce((a, r) => a + r.notfired, 0);
+  const notFiredContested = strata.reduce((a, r) => a + r.notfired_t, 0);
   const pf = fired ? firedContested / fired : 0;
   const pn = notFired ? notFiredContested / notFired : 0;
-  return { rule, fired, firedContested, notFired, notFiredContested, lift: pn > 0 ? pf / pn : null };
+  const mh = mantelHaenszel(strata);
+  return {
+    rule,
+    fired,
+    firedContested,
+    notFired,
+    notFiredContested,
+    lift: pn > 0 ? pf / pn : null,
+    liftStratified: mh.rr,
+    strata: mh.strata,
+  };
 }
 
 /** Returns null when nothing is labelled yet — the backfill has not run. */
@@ -172,10 +237,18 @@ export function formatReport(r: SignalReport): string {
     );
   }
   const table = (rows: RuleLift[]): void => {
-    out.push("  rule                        fired   P(contested|fired)   P(contested|not)     lift");
+    out.push("  rule                        fired    P(t|fired)    P(t|not)    pooled   by-category   flag");
     for (const x of rows) {
+      const pooled = x.lift === null ? "n/a" : x.lift.toFixed(2) + "x";
+      const strat = x.liftStratified === null ? "n/a" : x.liftStratified.toFixed(2) + "x";
+      // The gap between the two is the point of the table. A pooled figure
+      // several times its stratified twin is category composition.
+      const suspect =
+        x.lift !== null && x.liftStratified !== null && x.liftStratified > 0 && x.lift / x.liftStratified >= 3
+          ? "<-- composition"
+          : "";
       out.push(
-        `  ${x.rule.padEnd(24)} ${String(x.fired).padStart(8)}   ${pct(x.firedContested, x.fired).padStart(10)}   ${pct(x.notFiredContested, x.notFired).padStart(10)}   ${(x.lift === null ? "n/a" : x.lift.toFixed(2) + "x").padStart(7)}`,
+        `  ${x.rule.padEnd(24)} ${String(x.fired).padStart(8)}  ${pct(x.firedContested, x.fired).padStart(10)}  ${pct(x.notFiredContested, x.notFired).padStart(10)}  ${pooled.padStart(8)}  ${strat.padStart(8)} (${x.strata})  ${suspect}`,
       );
     }
   };
@@ -192,7 +265,18 @@ export function formatReport(r: SignalReport): string {
   );
   table(r.byRuleDisputed);
   out.push(
-    "\nReading it: lift near 1.0 means the rule carries no information. Prefer §4 over\n§2 until `disputed` is fully populated — §2 measures voidability, not dispute\nrisk. And §3 matters more than §2 for a watchlist, which ranks within the\nmarkets people actually trade.",
+    "\nReading it:\n" +
+      "  · `pooled` is the whole-corpus ratio. `by-category` is Mantel-Haenszel — the\n" +
+      "    same comparison made within each category, then pooled by size, so\n" +
+      "    composition cannot manufacture it. **Trust the second column.**\n" +
+      "  · Sports is 1.38M of 2.6M markets and almost never disputes, so any rule\n" +
+      "    firing more on Politics than Sports gets pooled lift for free. On\n" +
+      "    2026-08-24 `status-verb-gap` read 20.66x pooled and 1.08x within Politics.\n" +
+      "  · Lift near 1.0 means the rule carries no information.\n" +
+      "  · Prefer §4 over §2 until `disputed` is fully populated — §2 is ~99.7%\n" +
+      "    resolved_na, which measures voidability, not dispute risk.\n" +
+      "  · §3 matters more than §2 for a watchlist, which ranks within the markets\n" +
+      "    people actually trade.",
   );
   return out.join("\n");
 }
