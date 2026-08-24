@@ -48,9 +48,11 @@ export interface SignalReport {
   labelled: number;
   contested: number;
   disputed: number;
-  byDecile: Array<{ decile: number; n: number; contested: number }>;
+  byDecile: Array<{ decile: number; n: number; contested: number; disputed: number }>;
   byRule: RuleLift[];
   byRuleTopDecile: RuleLift[];
+  /** Same rules, but against `disputed` alone — see the Target note above. */
+  byRuleDisputed: RuleLift[];
 }
 
 /** One row per market: latest label, listing-time flags, volume decile. */
@@ -74,7 +76,22 @@ const BASE = sql`
     left join v1 on v1.market_id = m.id
   )`;
 
-async function liftFor(db: Db, rule: string, topDecileOnly: boolean): Promise<RuleLift> {
+/**
+ * `contested` is currently ~99.7% `resolved_na`, and that label is
+ * near-tautologically linked to some rules: `no-na-condition` detects text that
+ * never mentions N/A, so the markets it flags mostly *cannot* resolve N/A. Lift
+ * against `contested` therefore measures voidability, not dispute risk.
+ * `disputed` is the label the thesis is actually about — smaller, but clean.
+ */
+export type Target = "contested" | "disputed";
+
+async function liftFor(
+  db: Db,
+  rule: string,
+  topDecileOnly: boolean,
+  target: Target = "contested",
+): Promise<RuleLift> {
+  const col = target === "disputed" ? sql`disputed` : sql`contested`;
   const [r] = rowsOf<{ fired: number; fired_c: number; notfired: number; notfired_c: number }>(
     await db.execute(sql`
       ${BASE},
@@ -88,9 +105,9 @@ async function liftFor(db: Db, rule: string, topDecileOnly: boolean): Promise<Ru
           ${topDecileOnly ? sql`and b.decile = 10` : sql``}
       )
       select count(*) filter (where fired)::int as fired,
-             count(*) filter (where fired and contested)::int as fired_c,
+             count(*) filter (where fired and ${col})::int as fired_c,
              count(*) filter (where not fired)::int as notfired,
-             count(*) filter (where not fired and contested)::int as notfired_c
+             count(*) filter (where not fired and ${col})::int as notfired_c
       from flagged`),
   );
   const fired = r?.fired ?? 0;
@@ -115,20 +132,29 @@ export async function analyzeSignal(db: Db): Promise<SignalReport | null> {
   );
   if (!totals || totals.labelled === 0) return null;
 
-  const byDecile = rowsOf<{ decile: number; n: number; contested: number }>(
+  const byDecile = rowsOf<{ decile: number; n: number; contested: number; disputed: number }>(
     await db.execute(sql`
       ${BASE}
-      select decile, count(*)::int as n, count(*) filter (where contested)::int as contested
+      select decile, count(*)::int as n,
+             count(*) filter (where contested)::int as contested,
+             count(*) filter (where disputed)::int as disputed
       from base group by decile order by decile`),
-  ).map((r) => ({ decile: Number(r.decile), n: Number(r.n), contested: Number(r.contested) }));
+  ).map((r) => ({
+    decile: Number(r.decile),
+    n: Number(r.n),
+    contested: Number(r.contested),
+    disputed: Number(r.disputed),
+  }));
 
   const byRule: RuleLift[] = [];
   const byRuleTopDecile: RuleLift[] = [];
+  const byRuleDisputed: RuleLift[] = [];
   for (const rule of RULES) {
     byRule.push(await liftFor(db, rule, false));
     byRuleTopDecile.push(await liftFor(db, rule, true));
+    byRuleDisputed.push(await liftFor(db, rule, false, "disputed"));
   }
-  return { ...totals, byDecile, byRule, byRuleTopDecile };
+  return { ...totals, byDecile, byRule, byRuleTopDecile, byRuleDisputed };
 }
 
 const pct = (n: number, d: number): string => (d === 0 ? "n/a" : `${((100 * n) / d).toFixed(3)}%`);
@@ -138,11 +164,11 @@ export function formatReport(r: SignalReport): string {
   out.push(
     `markets labelled: ${r.labelled.toLocaleString()}   contested: ${r.contested.toLocaleString()} (${pct(r.contested, r.labelled)})   disputed: ${r.disputed.toLocaleString()}`,
   );
-  out.push("\n=== 1. contested rate by volume decile (10 = highest) ===");
+  out.push("\n=== 1. rate by volume decile (10 = highest) ===");
   for (const d of r.byDecile) {
     const bar = "#".repeat(Math.min(40, Math.round((1000 * d.contested) / Math.max(1, d.n))));
     out.push(
-      `  d${String(d.decile).padStart(2)}  n=${String(d.n).padStart(8)}  contested=${String(d.contested).padStart(6)}  ${pct(d.contested, d.n).padStart(9)}  ${bar}`,
+      `  d${String(d.decile).padStart(2)}  n=${String(d.n).padStart(8)}  contested=${String(d.contested).padStart(6)} ${pct(d.contested, d.n).padStart(8)}   disputed=${String(d.disputed).padStart(5)} ${pct(d.disputed, d.n).padStart(8)}  ${bar}`,
     );
   }
   const table = (rows: RuleLift[]): void => {
@@ -158,8 +184,15 @@ export function formatReport(r: SignalReport): string {
   out.push("\n=== 3. per-rule lift inside the top volume decile ===");
   out.push("  (where the stakes are; a rule useless corpus-wide may still rank here)");
   table(r.byRuleTopDecile);
+  out.push("\n=== 4. per-rule lift against `disputed` ALONE ===");
   out.push(
-    "\nReading it: lift near 1.0 means the rule carries no information. The top-decile\ncut matters more than the corpus-wide one — a watchlist ranks within the markets\npeople actually trade.",
+    "  `contested` is ~99.7% resolved_na, which is near-tautologically tied to some\n" +
+      "  rules (no-na-condition flags text that never mentions N/A, so those markets\n" +
+      "  largely cannot resolve N/A). This cut is the one the thesis is about.",
+  );
+  table(r.byRuleDisputed);
+  out.push(
+    "\nReading it: lift near 1.0 means the rule carries no information. Prefer §4 over\n§2 until `disputed` is fully populated — §2 measures voidability, not dispute\nrisk. And §3 matters more than §2 for a watchlist, which ranks within the\nmarkets people actually trade.",
   );
   return out.join("\n");
 }
