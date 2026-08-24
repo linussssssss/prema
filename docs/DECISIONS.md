@@ -400,6 +400,49 @@ re-architecting the label around a problem that does not exist.
 
 ---
 
+## ADR-0020 — `contested` unions two phenomena with opposite drivers (2026-08-24)
+
+**Finding, not yet a decision.** Recorded because it was invisible until real
+labels existed and it changes what `/eval` and the score can honestly claim.
+
+With 2,615,958 markets labelled (42,278 contested, 141 disputed), the composite
+`contested = disputed ∨ escalated ∨ resolved_na ∨ rules_edited` behaves as two
+different things stitched together:
+
+| | `resolved_na` | `disputed` |
+|---|---|---|
+| share of `contested` today | ~99.7% | ~0.3% |
+| volume gradient | **concentrates in LOW volume** (d1 4.0%, d10 0.375%) | concentrates in high volume (press: April's disputed contracts carried >$1B) |
+| meaning | the question was unanswerable, so it voided | someone paid a bond to challenge an answer |
+
+**The gradients run in opposite directions.** Unioning them means the composite
+partly cancels itself, and a model trained on it learns a mixture of two
+phenomena with different drivers — while a stakes-conditioned view of the union
+is close to meaningless.
+
+**It also breaks specific rules tautologically.** `no-na-condition` flags rules
+text that never mentions N/A; the label is *resolved N/A*. Markets whose rules
+do not contemplate voiding largely cannot void, so the rule scored 0.00x lift
+against `contested` — a definitional relationship presented as a prediction.
+The same confound inflated `hedge-words` to 28.81x, which collapsed to 1.14x
+once measured against `disputed` and stratified.
+
+**Consequences to decide (not decided here):**
+- Model `disputed` and `resolved_na` as **separate targets** rather than one, or
+  keep the union only as a coarse "something went wrong" flag.
+- The Phase-1 score almost certainly wants `disputed`: it is the failure mode
+  with money attached and the one the product narrative is about.
+- Anything published about "contested rate" must say which component it means.
+  The corpus-wide 1.6% is overwhelmingly voiding, not disputes.
+
+**Why this was not visible earlier:** the composite is defensible on paper —
+all four components are ways a resolution goes wrong. Only the measured volume
+gradients showed that two of them are driven by opposite forces. This is an
+argument for computing labels early on partial data, which cost nothing here
+and would have surfaced it before the label shaped `/eval`.
+
+---
+
 ## ADR-0018 — One getLogs for all three OO events via manual topics (2026-08-23)
 
 **Decision:** the OO query in `indexPolygon` issues a single `eth_getLogs` with

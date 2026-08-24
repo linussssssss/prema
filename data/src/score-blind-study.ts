@@ -77,7 +77,7 @@ function report(label: string, rows: Array<{ disputed: boolean; ambiguous: boole
 
 const repoRoot = path.resolve(path.dirname(new URL(import.meta.url).pathname).replace(/^\/([A-Za-z]:)/, "$1"), "..", "..");
 const studyPath = path.resolve(repoRoot, "..", "prema-web", "docs", "AMBIGUITY-STUDY.md");
-const keyPath = path.join(repoRoot, "data", "blind", "key.json");
+const keyPath = path.join(repoRoot, "data", "blind-key", "key.json");
 
 const md = readFileSync(studyPath, "utf8");
 const judgements = parseJudgements(md);

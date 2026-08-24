@@ -130,8 +130,11 @@ export async function buildBlindStudy(outDir: string): Promise<{ items: number; 
     }));
 
     mkdirSync(outDir, { recursive: true });
+    // Key goes in a sibling directory, never beside the judge's input.
+    const keyDir = outDir + "-key";
+    mkdirSync(keyDir, { recursive: true });
     writeFileSync(path.join(outDir, "ambiguity-study.json"), JSON.stringify(items, null, 2), "utf8");
-    writeFileSync(path.join(outDir, "key.json"), JSON.stringify(key, null, 2), "utf8");
+    writeFileSync(path.join(keyDir, "key.json"), JSON.stringify(key, null, 2), "utf8");
     return { items: items.length, disputed: disputed.length };
   } finally {
     await handle.close();

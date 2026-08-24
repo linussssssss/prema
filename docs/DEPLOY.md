@@ -66,23 +66,30 @@ compose file.
 
 ## 5. Restore
 
+Container names take their prefix from the directory you cloned into, so set it
+once — `~/prema` gives `prema-postgres-1`, not `verdict-postgres-1`:
+
+```bash
+PROJECT=$(basename "$PWD")
+```
+
 Order does not matter: `--disable-triggers` turns off FK validation during the
 load, which is needed because the staging split `venues` (dump 1) from
 `markets` (dump 3). The data was consistent when dumped.
 
 ```bash
 for f in 1-chain-state 2-rules-versions 3-markets; do
-  docker cp /root/$f.dump verdict-postgres-1:/tmp/
-  docker exec verdict-postgres-1 pg_restore -U verdict -d verdict \
+  docker cp /root/$f.dump ${PROJECT}-postgres-1:/tmp/
+  docker exec ${PROJECT}-postgres-1 pg_restore -U verdict -d verdict \
     --data-only --disable-triggers /tmp/$f.dump
-  docker exec verdict-postgres-1 rm -f /tmp/$f.dump
+  docker exec ${PROJECT}-postgres-1 rm -f /tmp/$f.dump
 done
 ```
 
 **Verify before going further:**
 
 ```bash
-docker exec verdict-postgres-1 psql -U verdict -d verdict -c \
+docker exec ${PROJECT}-postgres-1 psql -U verdict -d verdict -c \
   "select (select count(*) from markets) markets,
           (select count(*) from rules_versions) rules,
           (select count(*) from resolution_events) events,
@@ -112,7 +119,9 @@ escape.
 
 ```bash
 tmux new -s backfill
-pnpm --filter @verdict/workers run ingest:chain -- --chain polygon 2>&1 | tee /root/backfill.log
+# `exec tsx <script>`, NOT `run … --`: pnpm's `--` forwarding drops the args on
+# Linux ("unexpected argument --chain"). Verified live 2026-08-24.
+pnpm --filter @verdict/workers exec tsx src/cli/ingest-chain.ts --chain polygon 2>&1 | tee -a /root/backfill.log
 # detach: Ctrl-B then D      reattach: tmux attach -t backfill
 ```
 
@@ -138,15 +147,27 @@ against a ~1,000 threshold. Far below that is a code fault, not the world.
 ## 8. Retrieve results, then destroy
 
 ```bash
-docker exec verdict-postgres-1 pg_dump -U verdict -d verdict -Fc \
+docker exec ${PROJECT}-postgres-1 pg_dump -U verdict -d verdict -Fc \
   -T linter_hits -T rules_clauses -f /tmp/final.dump
-docker cp verdict-postgres-1:/tmp/final.dump /root/final.dump
+docker cp ${PROJECT}-postgres-1:/tmp/final.dump /root/final.dump
 ```
 
 ```powershell
 scp root@<ip>:/root/final.dump          C:\Users\Linus\Desktop\prema\backups\
 scp -r root@<ip>:/root/verdict-repo/data/exports C:\Users\Linus\Desktop\prema\backups\
 scp root@<ip>:/root/verdict-repo/data/REPORT.md  C:\Users\Linus\Desktop\prema\backups\
+```
+
+## 9. Start the recurring worker
+
+Do this once the backfill is done — they contend for the same 2 vCPUs. It is
+what finally gives `rules_edited_after_listing` and `price_reversal` any signal,
+and it is **time-gated**: only repeated polling over calendar time can observe a
+rules edit, and that time cannot be backfilled later.
+
+```bash
+tmux new -s worker
+pnpm --filter @verdict/workers exec tsx src/cli/worker.ts
 ```
 
 Then delete the server in the console — billing is hourly, so a finished run

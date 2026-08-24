@@ -14,12 +14,17 @@ data/exports/
 data/raw/
 *.pglite/
 
-# blinded ambiguity study: rebuildable via `pnpm --filter @verdict/data run
-# blind-study` (deterministic seed). Not committed for two reasons — key.json
-# would publish the answers next to the questions, and ambiguity-study.json
-# carries 170 markets' verbatim rules text, which SEO.md §4 says we don't
-# republish wholesale.
+# Blinded ambiguity study: rebuildable via `pnpm --filter @verdict/data run
+# blind-study` (deterministic seed). Not committed for two reasons —
+# ambiguity-study.json carries 170 markets' verbatim rules text, which SEO.md §4
+# says we don't republish wholesale, and the key would publish the answers.
+#
+# The key lives in a SEPARATE directory from the judge's input on purpose. The
+# website session saw `key.json` sitting beside the file it was judging and
+# flagged it as a protocol hazard — correctly. A blind that relies on the judge
+# choosing not to open a file in its working directory is not a blind.
 data/blind/
+data/blind-key/
 
 # python
 eval/.venv/
