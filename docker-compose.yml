@@ -1,3 +1,11 @@
+# All ports bind to 127.0.0.1 deliberately. Every consumer (workers, CLIs, the
+# API) runs on the same host, so nothing is lost — but on a public VPS a
+# 0.0.0.0 binding would expose Postgres (verdict/verdict), MinIO, and an
+# unauthenticated Redis to the internet. Open Redis is compromised in minutes:
+# the standard attack writes an SSH key via CONFIG SET dir.
+#
+# This binding is what actually protects you, not a host firewall — Docker
+# writes iptables rules directly and routinely bypasses ufw.
 services:
   postgres:
     image: pgvector/pgvector:pg16
@@ -6,7 +14,7 @@ services:
       POSTGRES_PASSWORD: verdict
       POSTGRES_DB: verdict
     ports:
-      - "5432:5432"
+      - "127.0.0.1:5432:5432"
     volumes:
       - pgdata:/var/lib/postgresql/data
     healthcheck:
@@ -18,7 +26,7 @@ services:
   redis:
     image: redis:7-alpine
     ports:
-      - "6379:6379"
+      - "127.0.0.1:6379:6379"
     volumes:
       - redisdata:/data
 
@@ -29,8 +37,8 @@ services:
       MINIO_ROOT_USER: verdict
       MINIO_ROOT_PASSWORD: verdict-secret
     ports:
-      - "9000:9000"
-      - "9001:9001"
+      - "127.0.0.1:9000:9000"
+      - "127.0.0.1:9001:9001"
     volumes:
       - miniodata:/data
 
