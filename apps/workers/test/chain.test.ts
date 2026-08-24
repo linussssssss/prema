@@ -133,6 +133,45 @@ describe("forEachAdaptiveRange", () => {
     expect(spans.reduce((a, b) => a + b, 0n)).toBe(1000n);
   });
 
+  it("waits out a network outage instead of dying mid-sweep", async () => {
+    // A sleeping laptop killed a run 2.5M blocks in on 2026-08-24: on wake the
+    // first request hit ENOTFOUND and the process exited. The request never
+    // left the machine, so neither shrinking nor giving up is right.
+    const spans: bigint[] = [];
+    let downFor = 3;
+    await forEachAdaptiveRange(
+      { fromBlock: 0n, toBlock: 999n },
+      { initialSpan: 500n, minSpan: 64n, backoffMs: 1 },
+      async (c) => {
+        if (downFor > 0) {
+          downFor -= 1;
+          throw new Error("HTTP request failed. [cause]: getaddrinfo ENOTFOUND polygon-mainnet.infura.io");
+        }
+        spans.push(c.toBlock - c.fromBlock + 1n);
+      },
+    );
+    expect(downFor).toBe(0);
+    expect(spans[0]).toBe(500n); // resumed at the same width, not halved
+    expect(spans.reduce((a, b) => a + b, 0n)).toBe(1000n);
+  });
+
+  it("does not mistake a network failure for a range error", async () => {
+    // "timeout" appears in both patterns; the network check must win, or a
+    // blip would permanently poison the learned ceiling.
+    let attempts = 0;
+    const spans: bigint[] = [];
+    await forEachAdaptiveRange(
+      { fromBlock: 0n, toBlock: 399n },
+      { initialSpan: 400n, minSpan: 64n, backoffMs: 1 },
+      async (c) => {
+        attempts += 1;
+        if (attempts === 1) throw new Error("fetch failed: ETIMEDOUT");
+        spans.push(c.toBlock - c.fromBlock + 1n);
+      },
+    );
+    expect(spans).toEqual([400n]);
+  });
+
   it("gives up after repeated rate limits rather than looping forever", async () => {
     await expect(
       forEachAdaptiveRange(

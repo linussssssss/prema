@@ -1,4 +1,3 @@
-/* eslint-disable no-console */
 /**
  * Unblinds and scores the ambiguity study (TODO P0 "signal validation").
  *

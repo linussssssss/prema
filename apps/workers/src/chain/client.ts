@@ -161,6 +161,18 @@ export interface LogRange {
  *  status and the provider wordings rather than the wrapper text. */
 const RATE_LIMITED = /\b429\b|too many requests|rate limit|throttl/i;
 
+/**
+ * The network went away — DNS failure, reset connection, unreachable host.
+ * Distinct from a range error (the request was too big) and from a rate limit
+ * (we asked too often): here the request never happened at all, so shrinking
+ * the span or giving up both throw away a resumable run for no reason.
+ *
+ * The case this exists for: a laptop sleeping mid-sweep. On wake the first
+ * request fires before DNS is back and dies with ENOTFOUND, killing a job that
+ * was hours in. Observed 2026-08-24 at block 64.47M after a 6.5-hour sleep.
+ */
+const TRANSIENT_NETWORK = /ENOTFOUND|EAI_AGAIN|ECONNRESET|ECONNREFUSED|ETIMEDOUT|EPIPE|ENETUNREACH|fetch failed|socket hang up/i;
+
 const sleep = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
 
 /**
@@ -189,6 +201,8 @@ export async function forEachAdaptiveRange(
     /** First rate-limit backoff; doubles per consecutive hit. */
     backoffMs?: number;
     maxRateLimitRetries?: number;
+    /** Network-outage retries. Default 40 with a 5-minute cap ≈ 3h tolerated. */
+    maxNetworkRetries?: number;
   },
   fetchChunk: (chunk: LogRange) => Promise<void>,
 ): Promise<void> {
@@ -197,10 +211,12 @@ export async function forEachAdaptiveRange(
   const relaxAfter = opts.relaxAfter ?? 16;
   const backoffMs = opts.backoffMs ?? 2_000;
   const maxRateLimitRetries = opts.maxRateLimitRetries ?? 8;
+  const maxNetworkRetries = opts.maxNetworkRetries ?? 40;
   let span = opts.initialSpan;
   let ceiling: bigint | null = null;
   let streak = 0;
   let rateLimitHits = 0;
+  let networkHits = 0;
   let from = range.fromBlock;
   while (from <= range.toBlock) {
     const to = from + span - 1n > range.toBlock ? range.toBlock : from + span - 1n;
@@ -209,6 +225,7 @@ export async function forEachAdaptiveRange(
       from = to + 1n;
       streak += 1;
       rateLimitHits = 0; // fresh backoff budget for the next throttle
+      networkHits = 0;
       if (ceiling !== null && streak >= relaxAfter) {
         ceiling = (ceiling * 5n) / 4n;
         streak = 0;
@@ -233,6 +250,23 @@ export async function forEachAdaptiveRange(
         logger.warn(
           { label: opts.label, waitMs, attempt: rateLimitHits, span: span.toString() },
           "rate limited; backing off without shrinking",
+        );
+        await sleep(waitMs);
+        continue;
+      }
+      // Checked before the range test on purpose: "timeout" appears in both
+      // patterns, but a request that never left the machine is not evidence
+      // that the range was too wide.
+      if (TRANSIENT_NETWORK.test(msg)) {
+        if (networkHits >= maxNetworkRetries) throw err;
+        // Capped exponential: quick retries for a blip, then a steady 5-minute
+        // poll so a long outage (a sleeping laptop) is waited out rather than
+        // failing a run that is hours in and fully resumable.
+        const waitMs = Math.min(backoffMs * 2 ** networkHits, 300_000);
+        networkHits += 1;
+        logger.warn(
+          { label: opts.label, waitMs, attempt: networkHits, err: msg.slice(0, 120) },
+          "network unavailable; waiting for it to come back",
         );
         await sleep(waitMs);
         continue;
