@@ -1,4 +1,4 @@
-# HANDOFF — sessions of 2026-08-23 → 24
+# HANDOFF (pipeline session) — 2026-08-23 → 24
 
 State of play, what changed, and what the next session should do. Companion to
 `STATUS.md` (state), `TODO.md` (backlog), `RECOVERY.md` (backfill plan),
@@ -6,9 +6,17 @@ State of play, what changed, and what the next session should do. Companion to
 
 **Headline:** the infrastructure risk is retired and the thesis has been tested
 for the first time. The answer is *a modest signal, not a strong one* — which
-changes the product's shape but does not end it. The backfill is ~8% done and
-resumable; the only thing standing between here and a labelled dataset is
-uninterrupted machine time.
+changes the product's shape but does not end it.
+
+**The backfill now runs on a Hetzner CPX22, not the laptop** (two thermal
+shutdowns killed local runs; the second cut mid-`pg_dump`). Migrated by
+restoring three dumps — no Gamma re-crawl. Verified resuming correctly from
+block 64,468,999 at 2026-08-24 15:02Z with `eventsStored` climbing and spans
+holding at the 10k cap. Runbook: `docs/DEPLOY.md`.
+
+**Sister repo:** the website session's work lives in `prema-web` (own remote,
+`prema-web.git`), merged to its `main`. Its `docs/` holds several things this
+repo depends on — see §7.
 
 ---
 
@@ -110,16 +118,21 @@ decile.
 ## 5. Implementation plan — next session
 
 ### P0.1 Finish the backfill (blocking everything)
-Resume — the cursor makes this safe to re-run at any time:
+Running on the VPS as of 2026-08-24 15:02Z. Safe to re-run at any time — the
+cursor makes it idempotent. On the server (`~/prema`, containers prefixed
+`prema-`):
 ```
-pnpm --filter @verdict/workers run ingest:chain -- --chain polygon
-DATASET_SKIP_GAMMA=1 pnpm dataset:build     # linter skips; labels + export
+pnpm --filter @verdict/workers exec tsx src/cli/ingest-chain.ts --chain polygon
+DATASET_SKIP_GAMMA=1 pnpm dataset:build     # linter runs here; then labels + export
 pnpm --filter @verdict/data run validate
 ```
-~28M blocks left ≈ 2,800 chunks ≈ **2.1M credits, 5–7 hours**. Before starting,
-**disable sleep and hibernate** — that is the whole game now. Then check
-`REPORT.md`: the gate should show ~2,000–2,600 disputes for Jan–May 2026. A
-result far below that is a code fault, not the world.
+**Use `exec tsx <script>`, not `run … --`.** pnpm's `--` forwarding drops the
+args on this box ("unexpected argument --chain"); `exec` passes them straight
+through. `docs/DEPLOY.md` still shows the `run --` form in places.
+
+~28M blocks ≈ 2,800 chunks ≈ **2.1M credits**, inside Infura's 3M/day. Then
+check `REPORT.md`: the gate should show ~2,000–2,600 disputes for Jan–May 2026.
+Far below that is a code fault, not the world.
 
 Consider Ethereum too (`--chain ethereum`): `resolution_events` holds **zero**
 Ethereum rows, so `escalated` is currently unpopulated and one of four label
@@ -165,7 +178,64 @@ extracting. And per MARKETING §5 weeks 5–8 — **do not ship a public
 linter-v1 watchlist**; with `hedge-words` on 57% of the corpus it would rank
 noise in front of the exact audience that checks.
 
-## 6. Open questions for the founder
+## 6. Cross-repo: what lives in `prema-web` that this repo needs
+
+The website session kept its own records. Its
+`prema-web/docs/HANDOFF-2026-08-24.md` is the counterpart to this file (same
+name, different repo — read both). Four things there are **pipeline work**, and
+would be lost to a session that only reads `verdict/`:
+
+**(a) The linter v2 taxonomy** — `prema-web/docs/AMBIGUITY-STUDY.md`, section
+"Taxonomy notes for linter v2". Derived from judging 170 markets blind, so it
+describes what actually confuses a careful reader rather than what we guessed
+in v1. The distilled version, with the surface forms that make each lintable:
+
+- **template residue** — outcome labels referenced in the rules text that are
+  not among the market's actual outcomes (a binary Fed market resolving to a
+  nonexistent "No change bracket"; a USA tiebreak clause in a non-USA relay
+  market). **This is roughly what `outcomes-not-exhaustive` was meant to be and
+  isn't** — a direct repair path for the rule that fires zero times.
+- **discretionary modal** — `may (immediately )?resolve` inside a conditional
+  clause. Trivial regex, reportedly high precision.
+- **announcement-vs-report** — trigger verb ("announces", "confirmed") plus a
+  consensus-of-reporting source clause. The social-event twin of
+  `occurrence-vs-reporting`, which is the rule that missed the Strategy market.
+- **definition-label mismatch** — the text defines a term in a way that does
+  not entail its plain label. Clause-extractor territory; decided real disputes.
+- Also: rule-vs-source conflict, criteria-overlap without precedence,
+  entity-identity, two-stage process, composite resolution, absent
+  deadline/source.
+
+**(b) Protective patterns are a missing feature class.** Recurring guards that
+*reduce* risk — a stated default direction ("if not confirmed by the date →
+No"), maximal self-resolving standards ("incontrovertible"), explicit e.g.
+anchors, pre-empting known fights. v1 has no concept of these. This may be why
+`hedge-words` (57.3% of the corpus) has no apparent discrimination: it cannot
+tell a hedged market *with* a default-direction guard from one without. A
+calibrated score should carry these as negative-weight features; v2 could emit
+`guards` alongside flags.
+
+**(c) The meta-observation, which may matter more than the taxonomy:**
+*ambiguity here is mostly a property of templates and their misapplication, not
+of individual drafting.* Price-candle and box-office templates were uniformly
+clean; the mention-market template failed only at tokenization edges; a guarded
+airdrop template beat its loose sibling exactly where the guards differ. If
+that holds, v2 should detect **template misapplication**, which has surface
+forms, rather than prose ambiguity, which does not.
+
+**(d) `CONTENT-HASH.md`** — the provenance spec, accepted as written: SHA-256
+over RFC 8785 JCS, `sha256-jcs-1:` prefix, explicit array sort keys, numerics
+as decimal strings, hashes `textHash` not `rulesText`, anchored via
+`appendAudit()`. **We emit the canonical bytes**; the site serves them verbatim
+so only one JCS implementation exists. Needed when `site-export.ts` is built.
+
+Still owed to them (all export-time, none blocking): `site-export.ts` producing
+the four JSON files, `rules_text` for the contested subset only, and a
+`resolution_events` export. And: **move `key.json` out of `data/blind/`** before
+any future blind round — they saw the filename beside their input and flagged
+it, correctly, as a protocol hazard.
+
+## 7. Open questions for the founder
 
 1. VPS now, or after the backfill? (Needed for Phase 3 regardless.)
 2. Does the 1.46x text signal change the pitch, or wait for the 13x-power rerun?
