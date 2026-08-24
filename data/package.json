@@ -7,7 +7,8 @@
     "dataset:build": "tsx src/build.ts",
     "validate": "tsx src/validate.ts",
     "postmortem": "tsx src/postmortem.ts",
-    "blind-study": "tsx src/cli-blind-study.ts"
+    "blind-study": "tsx src/cli-blind-study.ts",
+    "analyze:signal": "tsx src/cli-analyze-signal.ts"
   },
   "dependencies": {
     "@dsnp/parquetjs": "^1.8.0",
