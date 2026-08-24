@@ -27,6 +27,7 @@ import {
 } from "./config.ts";
 import {
   BACKFILL_MAX_RESPONSE_BYTES,
+  BACKFILL_TIMEOUT_MS,
   chunkTimeInterpolator,
   findBlockByTimestamp,
   forEachAdaptiveRange,
@@ -313,6 +314,7 @@ export async function indexPolygon(db: Db, opts: IndexOptions = {}): Promise<Ind
   const client = makeClient("polygon", {
     primaryOnly: true,
     maxResponseBodySize: BACKFILL_MAX_RESPONSE_BYTES,
+    timeout: BACKFILL_TIMEOUT_MS,
   });
   const managedOracle = await resolveManagedOracle(client);
   const ooAddresses = [POLYGON_CONTRACTS.oov2, ...(managedOracle ? [managedOracle] : [])] as Hex[];
@@ -445,6 +447,7 @@ export async function indexEthereum(db: Db, opts: IndexOptions = {}): Promise<In
   const client = makeClient("ethereum", {
     primaryOnly: true,
     maxResponseBodySize: BACKFILL_MAX_RESPONSE_BYTES,
+    timeout: BACKFILL_TIMEOUT_MS,
   });
   const stateKey = chainStateKey("ethereum");
   const head = (await client.getBlock({ blockTag: "latest" })).number - CONFIRMATIONS.ethereum;

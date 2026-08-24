@@ -187,6 +187,3 @@ open, and you'd rather build a reputation slowly than chase reach.
 It's probably not if you need an established brand, a defined brief, a budget to
 deploy, or quick growth numbers. There is no playbook here yet — writing it is
 the job.
-
-Happy to answer anything, including the awkward questions about funding,
-timeline and risk. Ask them.

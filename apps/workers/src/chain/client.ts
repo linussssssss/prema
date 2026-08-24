@@ -72,6 +72,15 @@ export function rpcUrlsFor(chain: ChainName): string[] {
  */
 export const BACKFILL_MAX_RESPONSE_BYTES = 64 * 1024 * 1024;
 
+/**
+ * Request timeout for the deep sweep. viem defaults to 10s, which is a
+ * sensible web-request default and far too short for these: a 10,000-block
+ * `eth_getLogs` in the dense 2026 ranges returns thousands of logs carrying
+ * full ancillary text, and was observed taking 5-26s per chunk before timing
+ * out and killing the run at block 82.59M on 2026-08-24.
+ */
+export const BACKFILL_TIMEOUT_MS = 120_000;
+
 export interface ClientOptions {
   /**
    * Build from the primary (Infura) URL alone — no `fallback()` transport.
@@ -83,6 +92,8 @@ export interface ClientOptions {
   primaryOnly?: boolean | undefined;
   /** Override viem's 10 MiB response cap; see BACKFILL_MAX_RESPONSE_BYTES. */
   maxResponseBodySize?: number | false | undefined;
+  /** Override viem's 10s request timeout; see BACKFILL_TIMEOUT_MS. */
+  timeout?: number | undefined;
 }
 
 export function makeClient(chain: ChainName, opts: ClientOptions = {}): PublicClient {
@@ -101,6 +112,7 @@ export function makeClient(chain: ChainName, opts: ClientOptions = {}): PublicCl
       retryCount: 3,
       retryDelay: 500,
       ...(opts.maxResponseBodySize !== undefined ? { maxResponseBodySize: opts.maxResponseBodySize } : {}),
+      ...(opts.timeout !== undefined ? { timeout: opts.timeout } : {}),
     }),
   );
   return createPublicClient({
@@ -276,7 +288,15 @@ export async function forEachAdaptiveRange(
       // returns a bare InvalidParams. Treat them all as shrinkable. Kept
       // deliberately narrow — a transient network failure must not be read as
       // a range error, or it would poison `ceiling` for the rest of the run.
-      const rangeError = /10000|10,000|range|too large|response size|limit|timeout|more than|invalid param/i.test(msg);
+      // `timed out` / `took too long` are viem's TimeoutError wording and mean
+      // the query was too heavy to answer, not that the network failed — the
+      // socket-level ETIMEDOUT is caught above. Matching only the token
+      // "timeout" missed both phrasings and killed the sweep at block 82.59M
+      // on 2026-08-24.
+      const rangeError =
+        /10000|10,000|range|too large|response size|limit|timeout|timed out|took too long|more than|invalid param/i.test(
+          msg,
+        );
       if (!rangeError || span <= minSpan) throw err;
       ceiling = span;
       streak = 0;

@@ -162,6 +162,32 @@ describe("forEachAdaptiveRange", () => {
     expect(spans.reduce((a, b) => a + b, 0n)).toBe(1000n);
   });
 
+  it("shrinks on a request timeout rather than dying", async () => {
+    // viem's TimeoutError says "took too long to respond" / "timed out" —
+    // neither contains the token "timeout", so the original pattern missed both
+    // and the error fell through to the rethrow, killing the sweep at block
+    // 82.59M on 2026-08-24. A heavy getLogs timing out means the range was too
+    // big, so the response is to halve it.
+    const spans: bigint[] = [];
+    let big = true;
+    await forEachAdaptiveRange(
+      { fromBlock: 0n, toBlock: 999n },
+      { initialSpan: 1000n, minSpan: 64n, backoffMs: 1 },
+      async (c) => {
+        if (big && c.toBlock - c.fromBlock + 1n > 500n) {
+          big = false;
+          throw new Error(
+            "TimeoutError: The request took too long to respond.\n\nDetails: The request timed out.\nVersion: viem@2.55.19",
+          );
+        }
+        spans.push(c.toBlock - c.fromBlock + 1n);
+      },
+    );
+    expect(big).toBe(false);
+    expect(spans[0]).toBeLessThanOrEqual(500n); // halved, not fatal
+    expect(spans.reduce((a, b) => a + b, 0n)).toBe(1000n);
+  });
+
   it("does not mistake a network failure for a range error", async () => {
     // "timeout" appears in both patterns; the network check must win, or a
     // blip would permanently poison the learned ceiling.
