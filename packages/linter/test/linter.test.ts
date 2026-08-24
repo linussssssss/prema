@@ -151,6 +151,41 @@ describe("real historical markets (recorded Gamma fixtures)", () => {
   });
 });
 
+describe("announcement-vs-report", () => {
+  it("catches the June 2026 Strategy market that occurrence-vs-reporting missed", () => {
+    // Real listing-time text of market 2169995 (>$60M, escalated to a DVM vote).
+    // The dispute: 32 BTC sold 26-31 May, disclosed in an 8-K filed 1 June. The
+    // act met the deadline; the evidence did not. occurrence-vs-reporting needs
+    // a formal lagging source and this text names none, so it stayed silent.
+    const text = fixture("microstrategy-sells-bitcoin-may-2026.txt");
+    const ids = ruleIds(lintRulesText(text, { outcomes: ["Yes", "No"] }));
+    expect(ids).toContain("announcement-vs-report");
+    expect(ids).not.toContain("occurrence-vs-reporting"); // pins the gap this rule fills
+  });
+
+  it("stays silent without a private act, however reporting-heavy the source", () => {
+    // "consensus of credible reporting" is boilerplate in 38% of the corpus, so
+    // it must never be sufficient on its own — that way lies another
+    // hedge-words.
+    const text =
+      'This market resolves to "Yes" if BTC trades above $100,000 by May 31, 2026, ' +
+      "per a consensus of credible reporting.";
+    expect(ruleIds(lintRulesText(text))).not.toContain("announcement-vs-report");
+  });
+
+  it("stays silent when the rules disambiguate which date governs", () => {
+    const text =
+      "Resolves Yes if the company sells any Bitcoin by May 31, 2026, regardless of when " +
+      "it is reported, per a consensus of credible reporting.";
+    expect(ruleIds(lintRulesText(text))).not.toContain("announcement-vs-report");
+  });
+
+  it("stays silent with no deadline", () => {
+    const text = "Resolves Yes if the company sells any Bitcoin, per a consensus of credible reporting.";
+    expect(ruleIds(lintRulesText(text))).not.toContain("announcement-vs-report");
+  });
+});
+
 describe("template-residue", () => {
   const binary = { outcomes: ["Yes", "No"] };
 

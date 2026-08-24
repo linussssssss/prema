@@ -66,13 +66,34 @@
     "delayed"
   ],
   "timezoneMarkers": [
-    "et", "est", "edt", "cst", "cdt", "pst", "pdt",
-    "utc", "gmt", "cet", "cest", "eastern time", "pacific time",
-    "central time", "coordinated universal"
+    "et",
+    "est",
+    "edt",
+    "cst",
+    "cdt",
+    "pst",
+    "pdt",
+    "utc",
+    "gmt",
+    "cet",
+    "cest",
+    "eastern time",
+    "pacific time",
+    "central time",
+    "coordinated universal"
   ],
   "boundarySemanticsMarkers": [
-    "11:59", "23:59", "12:00 am", "midnight", "end of day", "eod",
-    "inclusive", "exclusive", "on or before", "no later than", "prior to"
+    "11:59",
+    "23:59",
+    "12:00 am",
+    "midnight",
+    "end of day",
+    "eod",
+    "inclusive",
+    "exclusive",
+    "on or before",
+    "no later than",
+    "prior to"
   ],
   "laggingSources": [
     "official statistics",
@@ -148,5 +169,23 @@
     "according to data from",
     "as reported by",
     "consensus of"
+  ],
+  "privateActVerbs": [
+    "sells",
+    "sold",
+    "purchases",
+    "purchased",
+    "acquires",
+    "acquired",
+    "divests",
+    "divested"
+  ],
+  "reportingEvidenceCues": [
+    "credible reporting",
+    "consensus of",
+    "reported by",
+    "as reported",
+    "press reports",
+    "media reports"
   ]
 }

@@ -10,6 +10,7 @@ export type RuleId =
   | "hedge-words"
   | "deadline-no-timezone"
   | "occurrence-vs-reporting"
+  | "announcement-vs-report"
   | "status-verb-gap"
   | "vague-source"
   | "outcomes-not-exhaustive"
@@ -71,6 +72,16 @@ const deadlineRe = () =>
     `|\\d{1,2}/\\d{1,2}(?:/\\d{2,4})?` + // 5/31/26
     `|(?:the\\s+)?end of (?:${MONTHS}|the year|\\d{4})` +
     `|\\d{4})`, // "before 2027"
+    "gi",
+  );
+
+/** Deadline forms that carry no date: a clock time, or a reference out to the
+ *  market title. Used only by `announcement-vs-report` — see the note there. */
+const deadlineLikeRe = () =>
+  new RegExp(
+    `\\b(?:by|before|no later than|until)\\s+` +
+      `(?:\\d{1,2}:\\d{2}\\s*(?:am|pm)?(?:\\s*[a-z]{2,4})?` + // 11:59 PM ET
+      `|the\\s+(?:date|time|deadline)\\s+(?:specified|listed|stated|in the title))`,
     "gi",
   );
 
@@ -144,6 +155,56 @@ function rOccurrenceVsReporting(text: string): LintHit[] {
     }
   }
   return hits;
+}
+
+/**
+ * Announcement-vs-report: the resolving event is a **privately observable act**
+ * with a hard deadline, but the evidence for it arrives only through later
+ * reporting or disclosure. The act can therefore satisfy the deadline while the
+ * proof of it does not, and the rules never say which date governs.
+ *
+ * This is the pattern that decided the June 2026 Strategy market — a $60M+
+ * dispute escalated to a DVM vote — where 32 BTC sold 26–31 May were disclosed
+ * in an 8-K filed 1 June. `occurrence-vs-reporting` did not fire on it: that
+ * rule requires a *formal lagging source* (SEC filing, court records), and this
+ * text named none. The blinded study identified the gap as its own kind
+ * (`prema-web/docs/AMBIGUITY-STUDY.md`, "announcement-vs-report").
+ *
+ * Kept deliberately narrow. The tempting fix — trigger on the source clause —
+ * is wrong: "consensus of credible reporting" is Polymarket boilerplate present
+ * in **993,468 of 2,615,958** rules texts (38%), so a rule keyed on it would be
+ * as uninformative as `hedge-words`. The discriminating part is the private
+ * act. Measured 2026-08-24: the full conjunction matches 322 texts (0.012%).
+ */
+function rAnnouncementVsReport(text: string): LintHit[] {
+  const lower = text.toLowerCase();
+  // Broader than the shared `deadlineRe`, and local on purpose: four other
+  // rules depend on that regex and widening it would move their fire rates.
+  // The Strategy text carries no date at all — its deadline is "by 11:59 PM ET
+  // on the date specified in the title", i.e. a time-of-day plus a reference
+  // out to the market title. A deadline detector that only understands dates
+  // cannot see it.
+  const deadline = deadlineRe().exec(text) ?? deadlineLikeRe().exec(text);
+  if (!deadline) return [];
+  if (containsAny(lower, wordlists.occurrenceDisambiguators)) return [];
+  if (!containsAny(lower, wordlists.reportingEvidenceCues)) return [];
+
+  for (const verb of wordlists.privateActVerbs) {
+    const spans = findAll(text, verb);
+    const span = spans[0];
+    if (!span) continue;
+    return [
+      {
+        ruleId: "announcement-vs-report",
+        severity: "high",
+        span,
+        message:
+          `The resolving act ("${verb}") is privately observable and evidenced by reporting, against a deadline ` +
+          `("${deadline[0]}"). Rules do not say whether the act must occur by the deadline or be reported by it.`,
+      },
+    ];
+  }
+  return [];
 }
 
 function rStatusVerbGap(text: string): LintHit[] {
@@ -296,6 +357,7 @@ export function lintRulesText(text: string, ctx: LintContext = {}): LintHit[] {
     ...rHedgeWords(text),
     ...rDeadlineNoTimezone(text),
     ...rOccurrenceVsReporting(text),
+    ...rAnnouncementVsReport(text),
     ...rStatusVerbGap(text),
     ...rVagueSource(text, ctx),
     ...rOutcomesNotExhaustive(text, ctx),
