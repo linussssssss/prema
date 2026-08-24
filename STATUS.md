@@ -1,51 +1,50 @@
-# STATUS — Verdict, updated 2026-08-23 (evening)
+# STATUS — Prema, updated 2026-08-25
 
-Snapshot of everything that exists, everything verified, and everything known
-to be broken or missing. Written to make any future session (any model, or a
-human alone) productive within minutes. Companion files: `TODO.md` (what to do
-next, in priority order), `RECOVERY.md` (the backfill recovery plan and the
-phases after it). Product scope: `docs/PLAN.md`. Technical decisions:
-`docs/DECISIONS.md` (ADR-0001..0014). Conventions: `CLAUDE.md`. Go-to-market:
-`MARKETING.md`.
-
-> Every claim below was re-verified against the live machine and database on
-> 2026-08-23 evening. Where something could not be verified, it says so.
+Durable project state: what exists, what is verified, and what is known broken.
+**Read the newest file in `Handover/` first** — it carries what is in flight and
+supersedes anything here that contradicts it. Companions: `TODO.md` (backlog),
+`RECOVERY.md` (backfill plan), `docs/DECISIONS.md` (ADR-0001..0021),
+`docs/DEPLOY.md` (the VPS runbook), `MARKETING.md` (go-to-market),
+`docs/PLAN.md` (product scope).
 
 ## One-paragraph summary
 
-Phase 0 infrastructure is complete and the **full backfill is half-done**: the
-Gamma pass finished (2,615,958 markets and an equal number of listing-time
-rules versions, in Postgres), but the Polygon chain sweep died at exit 127
-around block 61.9M with only 31,573 events indexed, and that partial data
-predates the V4 adapters that resolve the bulk of the market universe. Nothing
-downstream of the chain pass has run on the real dataset: **`linter_hits` and
-`ambiguity_labels` are both empty**, and the CSV/Parquet exports on disk are
-still from the 2026-08-22 capped demo. The next action is a founder-triggered
-Polygon re-scan (`RECOVERY.md` §0.3, ~3 free-tier days of Infura credits) —
-but **only after the uncommitted V4 checksum fix is committed** (ADR-0014;
-next section), because a re-scan against HEAD would silently record no
-disputes for ~72% of the corpus. Quality gate is green: 55/55 tests. 20
-commits on `main`, pushed to `origin` = github.com/linussssssss/prema, with
-five files still dirty in the working tree.
+Phase 0 infrastructure is complete and **the backfill is running on a Hetzner
+CPX22, not this laptop** — two thermal shutdowns killed local runs, so the
+database was dumped and restored onto a VPS (`docs/DEPLOY.md`). The Gamma pass
+is done (2,615,958 markets, same number of listing-time rules versions), the
+linter has run over the whole corpus (5,183,533 hits at `linter-v1.0.0`; v1.1.0
+adds two rules and will re-lint), and labels have been computed on partial chain
+data (42,278 contested, of which 42,138 are `resolved_na` and 141 `disputed`).
+The Polygon sweep is mid-flight past block ~82.6M of ~92.6M. Nothing has been
+published; the CSV/Parquet exports on disk are stale.
 
-## Current state of the database (verified by query, 2026-08-23 evening)
+**The measured picture so far:** listing-time text carries a real but modest
+signal — roughly 1.5–2x once category composition is controlled for, agreeing
+across two independent methods (a blinded human-judgement study at 1.46x, and
+stratified rule lift at 0.93–2.02x). Uncontrolled numbers said 20x and were
+wrong. See ADR-0020 for the label-design problem this exposed.
 
-Postgres in Docker compose, `verdict-postgres-1`, healthy, up ~10h.
+## Database (this laptop; the VPS copy is ahead on `resolution_events`)
 
 | Table | Rows | Meaning |
 |---|---:|---|
-| `markets` | 2,615,958 | Gamma pass **complete** (both cursors `done: true`) |
+| `markets` | 2,615,958 | Gamma pass complete (both cursors `done: true`) |
 | `rules_versions` | 2,615,958 | One listing-time (v1) row per market |
-| `resolution_events` | 31,573 | **Partial** — from the sweep that died |
-| `linter_hits` | 0 | Linter has not run on the real dataset |
-| `ambiguity_labels` | 0 | Labels have not run — **there is no label data yet** |
-| `audit_log` | 26,248 | Hash chain |
-| `ingest_state` | 2 | Both Gamma cursors only — see below |
+| `linter_hits` | 5,183,533 | Full corpus at `linter-v1.0.0` |
+| `resolution_events` | 56,833 | Partial — the VPS run is well ahead of this |
+| `ambiguity_labels` | 2,615,958 | 42,278 contested · 141 disputed · 0 escalated |
+| `audit_log` | 31,000+ | Hash chain, verified intact |
 
-`resolution_events` breakdown (all `polygon`; **zero Ethereum events indexed
-so far**): QuestionInitialized 7,889 · ProposePrice 6,832 · Settle 6,813 ·
-QuestionResolved 6,556 · ConditionResolution 3,121 · DisputePrice 198 ·
-QuestionReset 164.
+**Backups exist** (`../backups/*.dump`, ~850 MB total, 2026-08-24). No longer
+single-copy. `linter_hits` and `rules_clauses` are deliberately excluded — they
+regenerate deterministically in about an hour.
+
+Rule fire rates across the corpus: `hedge-words` 57.3% · `no-na-condition`
+40.9% · `vague-source` 9.5% · `deadline-no-timezone` 1.0% · `status-verb-gap`
+0.8% · `occurrence-vs-reporting` 0.1% · `outcomes-not-exhaustive` **0.0%**
+(unreachable: every market is binary, so its `<= 2 outcomes` guard always
+returns early — see the note in `packages/linter/src/index.ts`).
 
 **198 DisputePrice events is the number the sanity gate is measured against**
 (`TODO.md` wants ~1,000+ for Jan–May 2026 alone). That is expected for a
@@ -101,7 +100,8 @@ the composite label's primary signal, silently empty, after ~3 days of
 credits.
 
 **Therefore: commit and push this before triggering the re-scan in
-`RECOVERY.md` §0.3.** It is currently the only copy, on one laptop.
+`RECOVERY.md` §0.3.** Backed up to `../backups/` on 2026-08-24 and restored
+onto the VPS; no longer a single copy.
 
 ## Dev machine state (Windows 10, this laptop)
 
@@ -180,8 +180,9 @@ Two things that bind across the boundary:
 (t = epoch seconds). All keyless.
 
 **Contracts** (sources named in `apps/workers/src/chain/config.ts` comments).
-**Store every address EIP-55 checksummed** — see the uncommitted-work section
-for why this is not cosmetic.
+**Store every address EIP-55 checksummed** (ADR-0014) — a test pins it. Not
+cosmetic: viem rejects a bad-checksum literal on `readContract` while `getLogs`
+lowercases and keeps working, which hid MOOv2 for a day.
 - Polygon: UmaCtfAdapter v1 `0xCB1822859cEF82Cd2Eb4E6276C7916e692995130`,
   v2 `0x6A9D222616C90FcA5754cd1333cFD9b7fb6a4F74`,
   v3 `0x157Ce2d672854c848c9b79C49a8Cc6cc89176a49`,
@@ -284,7 +285,7 @@ for why this is not cosmetic.
 
 ```
 pnpm install
-pnpm lint && pnpm typecheck && pnpm test     # verified green: 55/55, 10 files
+pnpm lint && pnpm typecheck && pnpm test     # 97/97 across 12 files (2026-08-25)
 pnpm db:migrate                              # needs DATABASE_URL
 pnpm dataset:build                           # full run; caps via DATASET_* envs
 pnpm --filter @verdict/data run validate     # sanity gate; run BEFORE trusting numbers

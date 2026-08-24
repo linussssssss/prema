@@ -4,11 +4,43 @@
 is the ADR log for technical decisions — add an entry when you make one, as
 you go, not at the end.
 
-**Start every session by reading `STATUS.md`** (full project state, verified
-external facts, environment quirks) **and `TODO.md`** (prioritized backlog
-with per-item context). Keep both current: update STATUS.md when reality
-changes, check items off in TODO.md as they land. `MARKETING.md` is the
-source of truth for go-to-market, positioning, and commercial sequencing.
+**Start every session by reading, in this order:**
+
+1. **The newest file in `Handover/`** — what the last session did, where it
+   stopped, and what is mid-flight. Named `HANDOVER-YYYY-MM-DD[-scope].md`.
+   Read the most recent one before anything else; it is the fastest route to
+   the current state and it supersedes anything older that contradicts it.
+2. **`STATUS.md`** — durable project state, verified external facts,
+   environment quirks.
+3. **`TODO.md`** — prioritized backlog with per-item context.
+
+`MARKETING.md` is the source of truth for go-to-market and commercial
+sequencing. `docs/ROADMAP.md` is the company plan; `docs/ROADMAP-next-sessions.md`
+is the near-term engineering one.
+
+## Handover discipline
+
+**Open a handover file as soon as your first task of the session is done** —
+not at the end, when a crash or a context limit takes it with you. Append to it
+as each further task lands.
+
+- Path: `Handover/HANDOVER-<today>.md`, adding a scope suffix if two sessions
+  run the same day (`-pipeline`, `-web`).
+- **Keep it short.** A page or two, not twenty. It is a handover, not a diary:
+  what changed, why it changed, what is running, what is now known that was not
+  before, and what the next session should do first.
+- **Do not restate what lives elsewhere.** ADRs hold decisions, `TODO.md` holds
+  the backlog, git holds the diffs. Link to them. The handover exists for what
+  none of those capture: things in flight, traps discovered, and assumptions
+  that turned out wrong.
+- Record measurements with their caveats, and corrections explicitly. A number
+  that later proved confounded is worth more than a number presented as settled.
+- If something is mid-run (a backfill, a worker), say exactly how to check it
+  and how to resume it.
+
+Keep `STATUS.md` and `TODO.md` current too — update STATUS when reality
+changes, check items off in TODO as they land. If STATUS contradicts the newest
+handover, STATUS is the stale one: fix it.
 
 ## Non-negotiables (company-defining; never trade these away)
 

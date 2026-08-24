@@ -28,7 +28,8 @@ ADRs as you go; `pnpm lint && pnpm typecheck && pnpm test` before "done".
       sweeps now use the Infura-only transport (no Alchemy thrash), and
       `ingest:chain --reset-cursor` clears a poisoned cursor through an
       audited code path.
-- [ ] **Polygon re-scan (FOUNDER-TRIGGERED — credit-sensitive)**. The first
+- [~] **Polygon re-scan — RUNNING on the VPS since 2026-08-24** (see the newest
+      file in `Handover/` for how to check and resume it). The first
       sweep died at exit 127 (~block 61.9M, external process death), and that
       checkpoint predates the V4 adapters, so it must be reset rather than
       resumed. ~8M Infura credits ≈ ~3 free-tier days; resumable across days
@@ -144,7 +145,10 @@ The linter has now run over all **2,615,958 rules versions → 5,183,533 hits**
 These are base rates, not lift — lift needs the labels, which need the chain
 backfill. But three things are already actionable and two are uncomfortable.
 
-- [ ] **`outcomes-not-exhaustive` fires ZERO times in 2.6M versions.** Not a
+- [x] **`outcomes-not-exhaustive` — DIAGNOSED, kept, replaced.** Unreachable
+      rather than broken: every market is binary so its `<= 2 outcomes` guard
+      always returns early. `template-residue` (9.26% fire rate) is the version
+      that bites on a binary corpus. Not a
       data bug: `markets.outcomes` is stored as a proper JSON array
       (`["$10", "$20"]`, 2,615,958 rows), so the rule is fed what it expects and
       still never matches. It passes its unit test and does nothing on reality.
