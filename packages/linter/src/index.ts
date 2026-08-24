@@ -1,6 +1,8 @@
 import wordlists from "./wordlists.json";
 
-export const LINTER_VERSION = "linter-v1.0.0";
+/** Bumping this invalidates the skip-check in `runLinterOverRules`, so the next
+ *  linter pass re-lints the whole corpus (~2.6M versions, ~1h). Intended. */
+export const LINTER_VERSION = "linter-v1.1.0";
 
 export type Severity = "info" | "warn" | "high";
 
@@ -11,6 +13,7 @@ export type RuleId =
   | "status-verb-gap"
   | "vague-source"
   | "outcomes-not-exhaustive"
+  | "template-residue"
   | "no-na-condition";
 
 export interface LintHit {
@@ -188,6 +191,15 @@ function rVagueSource(text: string, ctx: LintContext): LintHit[] {
   ];
 }
 
+/**
+ * NOTE (2026-08-24): this rule fires **zero** times across all 2,615,958
+ * Polymarket rules versions, because every one of those markets has exactly two
+ * outcomes — NegRisk multi-outcome events are modelled as separate binary
+ * markets, so the >2 case simply does not occur in this venue's data. The rule
+ * is correct and unreachable, not broken; it is kept for venues whose markets
+ * are genuinely multi-outcome. `template-residue` below is the pattern that
+ * actually bites on a binary corpus.
+ */
 function rOutcomesNotExhaustive(text: string, ctx: LintContext): LintHit[] {
   const outcomes = (ctx.outcomes ?? []).map((o) => o.toLowerCase());
   if (outcomes.length <= 2) return []; // binary Yes/No is exhaustive by construction
@@ -204,6 +216,64 @@ function rOutcomesNotExhaustive(text: string, ctx: LintContext): LintHit[] {
       message: `Multi-outcome market (${outcomes.length} outcomes) with no "Other"/"None of the above"/N/A catch-all; outcomes may not be exhaustive.`,
     },
   ];
+}
+
+/**
+ * Template residue: the rules name a resolution target that is not one of the
+ * market's actual outcomes — a copy-paste artefact from another market family.
+ * Observed live: binary Fed markets resolving to a nonexistent "No change"
+ * bracket, a USA tiebreak clause pasted into non-USA relay markets.
+ *
+ * Identified by the blinded ambiguity study as both common and highly lintable
+ * (`prema-web/docs/AMBIGUITY-STUDY.md`), and it is the pattern
+ * `outcomes-not-exhaustive` was reaching for but cannot see on a binary corpus.
+ *
+ * Deliberately high-precision: only *explicitly delimited* targets count — a
+ * quoted string, or a capitalised phrase followed by bracket/option/outcome.
+ * Free-text mentions are too noisy to be worth flagging. Void targets
+ * ("N/A", "50-50") are legitimate and exempt.
+ */
+function rTemplateResidue(text: string, ctx: LintContext): LintHit[] {
+  const outcomes = (ctx.outcomes ?? []).map(normalizeTarget).filter((o) => o.length > 0);
+  if (outcomes.length === 0) return [];
+
+  const hits: LintHit[] = [];
+  const seen = new Set<string>();
+  const patterns = [
+    /resolv\w*\s+to\s+(?:the\s+)?["“'”]([^"“'”]{1,40})["“'”]/gi,
+    /resolv\w*\s+to\s+(?:the\s+)?([A-Z][\w'’-]*(?:\s+[\w'’-]+){0,3})\s+(?:bracket|option|outcome|category|bucket)\b/g,
+  ];
+  for (const re of patterns) {
+    let m: RegExpExecArray | null;
+    while ((m = re.exec(text)) !== null) {
+      const raw = m[1] ?? "";
+      const target = normalizeTarget(raw);
+      if (target.length === 0 || seen.has(target)) continue;
+      if (outcomes.includes(target)) continue;
+      // Voiding to N/A or 50-50 is a legitimate target, not a stray label.
+      if (containsAny(target, wordlists.naMarkers)) continue;
+      seen.add(target);
+      hits.push({
+        ruleId: "template-residue",
+        severity: "high",
+        span: { start: m.index, end: m.index + m[0].length },
+        message: `Rules resolve to "${raw.trim()}", which is not one of this market's outcomes (${(ctx.outcomes ?? []).join(", ")}) — likely copied from another market family.`,
+      });
+      if (m.index === re.lastIndex) re.lastIndex++;
+    }
+  }
+  return hits;
+}
+
+/** Lowercase, strip surrounding punctuation and collapse whitespace, so
+ *  `"No change"` and `no  change.` compare equal. */
+function normalizeTarget(s: string): string {
+  return s
+    .toLowerCase()
+    .replace(/[.,;:!?]+$/g, "")
+    .replace(/^[\s"'“”]+|[\s"'“”]+$/g, "")
+    .replace(/\s+/g, " ")
+    .trim();
 }
 
 function rNoNaCondition(text: string): LintHit[] {
@@ -229,6 +299,7 @@ export function lintRulesText(text: string, ctx: LintContext = {}): LintHit[] {
     ...rStatusVerbGap(text),
     ...rVagueSource(text, ctx),
     ...rOutcomesNotExhaustive(text, ctx),
+    ...rTemplateResidue(text, ctx),
     ...rNoNaCondition(text),
   ];
   return hits.sort((a, b) => a.span.start - b.span.start || a.ruleId.localeCompare(b.ruleId));

@@ -151,6 +151,62 @@ describe("real historical markets (recorded Gamma fixtures)", () => {
   });
 });
 
+describe("template-residue", () => {
+  const binary = { outcomes: ["Yes", "No"] };
+
+  it("flags a resolution target that is not one of the market's outcomes", () => {
+    // The live case: binary Fed markets whose rules resolve to a bracket that
+    // exists only in the multi-outcome template they were copied from.
+    const hits = lintRulesText(
+      'If the Fed holds rates steady, this market resolves to the "No change" bracket.',
+      binary,
+    );
+    const hit = hits.find((h) => h.ruleId === "template-residue");
+    expect(hit).toBeDefined();
+    expect(hit!.message).toContain("No change");
+    // The span must point at the offending text, not the whole document.
+    expect(hit!.span.end).toBeGreaterThan(hit!.span.start);
+  });
+
+  it("does not flag a target that IS an outcome", () => {
+    const hits = lintRulesText('This market resolves to "Yes" if the bill passes.', binary);
+    expect(ruleIds(hits)).not.toContain("template-residue");
+  });
+
+  it("is case- and punctuation-insensitive when matching outcomes", () => {
+    const hits = lintRulesText('Resolves to "yes." if confirmed.', binary);
+    expect(ruleIds(hits)).not.toContain("template-residue");
+  });
+
+  it("exempts legitimate void targets", () => {
+    // Voiding to N/A or 50-50 is a real resolution path, not a stray label.
+    for (const t of ['resolves to "N/A" if the event is cancelled.', 'resolves to "50-50" if undetermined.']) {
+      expect(ruleIds(lintRulesText(t, binary))).not.toContain("template-residue");
+    }
+  });
+
+  it("does not fire on unquoted prose about resolution", () => {
+    // High precision is the point: free-text mentions are too noisy to flag.
+    const hits = lintRulesText(
+      "This market resolves to the outcome determined by the official source.",
+      binary,
+    );
+    expect(ruleIds(hits)).not.toContain("template-residue");
+  });
+
+  it("stays silent when outcomes are unknown", () => {
+    expect(ruleIds(lintRulesText('resolves to "No change" bracket.', {}))).not.toContain("template-residue");
+  });
+
+  it("reports each distinct stray target once", () => {
+    const hits = lintRulesText(
+      'Resolves to "No change" bracket. Otherwise resolves to "No change" bracket again.',
+      binary,
+    ).filter((h) => h.ruleId === "template-residue");
+    expect(hits).toHaveLength(1);
+  });
+});
+
 describe("determinism", () => {
   it("same input, same output", () => {
     const text = fixture("xi-jinping-out-before-2027.txt");
