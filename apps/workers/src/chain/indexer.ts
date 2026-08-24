@@ -74,20 +74,43 @@ export interface IndexStats {
   complete: boolean;
 }
 
-function serializeArgs(args: Record<string, unknown>): Record<string, unknown> {
+export function serializeArgs(args: Record<string, unknown>): Record<string, unknown> {
   const out: Record<string, unknown> = {};
   for (const [k, v] of Object.entries(args)) {
     if (typeof v === "bigint") out[k] = v.toString();
-    else if (Array.isArray(v)) out[k] = v.map((x) => (typeof x === "bigint" ? x.toString() : x));
-    else out[k] = v;
+    else if (Array.isArray(v)) out[k] = v.map((x) => (typeof x === "bigint" ? x.toString() : stripNul(x)));
+    // Every string that reaches jsonb goes through stripNul, not just the
+    // decoded ancillary: one NUL anywhere fails the whole batch insert, and
+    // finding out which field carried it costs a backfill.
+    else out[k] = stripNul(v);
   }
   return out;
 }
 
-function ancillaryUtf8(hex: Hex | undefined): string | null {
+/**
+ * Postgres cannot store U+0000 in `text` or `jsonb` — it rejects the entire
+ * insert with SQLSTATE 22P05. UMA pads fixed-width fields with NUL bytes, so
+ * decoded ancillary data carries them ("YES_OR_NO_QUERY" plus 17 NULs to fill
+ * bytes32). That killed a backfill at ~61% on 2026-08-24 and would have
+ * recurred at the same block on every resume.
+ *
+ * The NULs are padding, never content, and the raw bytes are still kept in
+ * `args.ancillaryData` — so stripping is lossless for anything we rely on.
+ */
+/** U+0000 as a value, not a literal: an invisible control character in source
+ *  is mangled by formatters and editors without warning. */
+const NUL = String.fromCharCode(0);
+
+function stripNul<T>(value: T): T {
+  if (typeof value === "string") return value.split(NUL).join("") as T;
+  if (Array.isArray(value)) return value.map(stripNul) as T;
+  return value;
+}
+
+export function ancillaryUtf8(hex: Hex | undefined): string | null {
   if (!hex) return null;
   try {
-    return hexToString(hex).slice(0, 16_384);
+    return stripNul(hexToString(hex)).slice(0, 16_384);
   } catch {
     return null;
   }

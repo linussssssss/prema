@@ -12,7 +12,14 @@ import {
 } from "viem";
 import { auditLog, createDb, ingestState, verifyAuditChain, type DbHandle } from "@verdict/schema";
 import { forEachAdaptiveRange, makeClient } from "../src/chain/client.ts";
-import { chainStateKey, decodeOoLogs, resetChainCursor, setChainCursor } from "../src/chain/indexer.ts";
+import {
+  ancillaryUtf8,
+  chainStateKey,
+  decodeOoLogs,
+  resetChainCursor,
+  serializeArgs,
+  setChainCursor,
+} from "../src/chain/indexer.ts";
 import {
   ETHEREUM_CONTRACTS,
   OO_EVENT_TOPICS,
@@ -252,6 +259,32 @@ describe("chain config", () => {
     // logs by our own topic0 list, so a decode failure means a real defect.
     const bad = { ...good, data: "0xdeadbeef" as Hex };
     expect(decodeOoLogs([bad])).toHaveLength(0);
+  });
+
+  it("strips NUL bytes before anything reaches jsonb", () => {
+    // Postgres rejects U+0000 in text/jsonb with SQLSTATE 22P05 and fails the
+    // WHOLE batch insert, not the offending row. UMA pads bytes32 with NULs, so
+    // decoded ancillary carries them — this killed a backfill at ~61% on
+    // 2026-08-24 and would have recurred at the same block on every resume.
+    const NUL = String.fromCharCode(0);
+
+    // bytes32-padded identifier, exactly the shape that broke it.
+    const decoded = ancillaryUtf8(stringToHex("YES_OR_NO_QUERY", { size: 32 }));
+    expect(decoded).toBe("YES_OR_NO_QUERY");
+    expect(decoded).not.toContain(NUL);
+
+    // And every other string on the args payload, not just the ancillary.
+    const args = serializeArgs({
+      identifier: `YES_OR_NO_QUERY${NUL.repeat(17)}`,
+      timestamp: 123n,
+      payouts: [`a${NUL}`, 5n],
+      nested: null,
+    });
+    expect(args.identifier).toBe("YES_OR_NO_QUERY");
+    expect(args.timestamp).toBe("123"); // bigints still stringified
+    expect(args.payouts).toEqual(["a", "5"]);
+    // The real assertion: this payload must survive JSON encoding for jsonb.
+    expect(JSON.stringify(args)).not.toContain("\\u0000");
   });
 
   it("stores every address EIP-55 checksummed", () => {
