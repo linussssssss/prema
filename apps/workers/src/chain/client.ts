@@ -252,7 +252,13 @@ export async function forEachAdaptiveRange(
     /** Consecutive UNRECOGNISED errors tolerated before giving up. Low by
      *  design: a deterministic failure exhausts it in seconds. */
     maxUnknownRetries?: number;
-    /** Provider failures at one width before shrinking as well as waiting. */
+    /**
+     * Provider failures at one width before shrinking as well as waiting.
+     * Default 1: shrinking early is nearly free even when the provider really
+     * is just busy, because the smaller request fails too and the backoff
+     * simply continues — whereas waiting three times at a width that can never
+     * succeed cost ~2.5 minutes per occurrence in the live run.
+     */
     shrinkAfterNetworkHits?: number;
   },
   fetchChunk: (chunk: LogRange) => Promise<void>,
@@ -264,7 +270,7 @@ export async function forEachAdaptiveRange(
   const maxRateLimitRetries = opts.maxRateLimitRetries ?? 8;
   const maxNetworkRetries = opts.maxNetworkRetries ?? 40;
   const maxUnknownRetries = opts.maxUnknownRetries ?? 5;
-  const shrinkAfterNetworkHits = opts.shrinkAfterNetworkHits ?? 3;
+  const shrinkAfterNetworkHits = opts.shrinkAfterNetworkHits ?? 1;
   let span = opts.initialSpan;
   let ceiling: bigint | null = null;
   let streak = 0;
@@ -312,7 +318,9 @@ export async function forEachAdaptiveRange(
       // Checked before the range test on purpose: "timeout" appears in both
       // patterns, but a request that never left the machine is not evidence
       // that the range was too wide.
-      if (TRANSIENT_NETWORK.test(msg) || SERVER_TRANSIENT.test(msg)) {
+      const isNetwork = TRANSIENT_NETWORK.test(msg);
+      const isServer = SERVER_TRANSIENT.test(msg);
+      if (isNetwork || isServer) {
         if (networkHits >= maxNetworkRetries) throw err;
         // Capped exponential: quick retries for a blip, then a steady 5-minute
         // poll so a long outage (a sleeping laptop) is waited out rather than
@@ -327,7 +335,11 @@ export async function forEachAdaptiveRange(
         // fixes. Doing both covers each case; waiting alone would spin for
         // hours on a query that can never succeed at this size. Observed live
         // at block ~82.85M on 2026-08-24.
-        const shrinking = networkHits > shrinkAfterNetworkHits && span > minSpan;
+        // Only SERVER errors escalate to shrinking. A network fault means the
+        // request never reached the provider, so its size was never the
+        // question — shrinking there would narrow the sweep for no reason and
+        // then have to climb back. A server error is the ambiguous one.
+        const shrinking = isServer && networkHits > shrinkAfterNetworkHits && span > minSpan;
         if (shrinking) {
           ceiling = span;
           streak = 0;

@@ -222,8 +222,11 @@ describe("forEachAdaptiveRange", () => {
     // declining. The request was fine, so retry at the same width rather than
     // shrinking — shrinking would poison the learned ceiling for a reason that
     // has nothing to do with the range. Killed a sweep at ~82.6M on 2026-08-24.
+    // A single blip is retried at the SAME width — the escalation to shrinking
+    // only starts if it keeps failing (see the next test), so a one-off does
+    // not narrow the sweep and force it to climb back.
     const spans: bigint[] = [];
-    let down = 2;
+    let down = 1;
     await forEachAdaptiveRange(
       { fromBlock: 0n, toBlock: 999n },
       { initialSpan: 500n, minSpan: 64n, backoffMs: 1 },

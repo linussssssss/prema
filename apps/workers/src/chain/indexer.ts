@@ -331,7 +331,10 @@ export async function indexPolygon(db: Db, opts: IndexOptions = {}): Promise<Ind
 
   await forEachAdaptiveRange(
     { fromBlock: startBlock, toBlock: endBlock },
-    { initialSpan: INITIAL_SPAN.polygon, maxSpan: MAX_SPAN.polygon, label: "polygon" },
+    // relaxAfter is well above the default: re-probing a width the provider
+    // has already refused costs ~30s here (a failed heavy getLogs), not the
+    // milliseconds a clean range error costs, so probe upward far less often.
+    { initialSpan: INITIAL_SPAN.polygon, maxSpan: MAX_SPAN.polygon, relaxAfter: 48, label: "polygon" },
     async (chunk) => {
       const pending: PendingEvent[] = [];
 
