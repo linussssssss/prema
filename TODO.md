@@ -193,16 +193,44 @@ raises and the product changes shape. Everything in P1/P2 is downstream of it.
       `key.json`. Deterministic seed, gitignored — rebuildable, and neither the
       answers nor 170 markets' verbatim rules text belong in a public repo
       (SEO.md §4).
-- [ ] **Judgement — assigned to the website session** (`PROMPT-web-parallel-3.md`).
-      The judge must not know the labels: this session does, so its judgement
-      here would be worthless — it would find ambiguity in every contested
-      market because it knows the answer. The blind is structural, not a
-      promise to be careful.
-- [ ] **Unblind and score.** Contested-vs-control ambiguity rate, plus the
-      `kind` breakdown, which is the direct input to linter v2's rule set.
-- [ ] **Decision gate.** A large gap → build the Phase 1 extractor aimed at the
-      `kind`s that dominate. Little or no gap → stop and rethink the product
-      before writing more scoring code.
+- [x] **Judged blind by the website session**, 170/170, pre-registered
+      criterion committed before the input existed.
+- [x] **Scored 2026-08-24** (`pnpm --filter @verdict/data exec tsx
+      src/score-blind-study.ts`). **There is a signal and it is modest.**
+
+      | cut | contested | control | diff | lift |
+      |---|---|---|---|---|
+      | all items | 47/85 = 55.3% | 27/85 = 31.8% | +23.5pp | 1.74x |
+      | **excluding disclosed** | **30/68 = 44.1%** | **25/83 = 30.1%** | **+14.0pp** | **1.46x** |
+      | disclosed only | 17/17 = 100% | 2/2 = 100% | 0pp | 1.00x |
+      | confidence >=2, ex-disclosed | 21/45 = 46.7% | 17/65 = 26.2% | +20.5pp | 1.78x |
+
+      Two-proportion z-test: ex-disclosed p≈0.075 (marginal); restricted to
+      confidence>=2, p≈0.026 (significant). The effect *sharpens* when
+      restricted to confident judgements, which is the direction a real signal
+      moves.
+- [x] **The disclosure exclusion was necessary, and the data proves it.**
+      Every disclosed item was judged ambiguous — including both disclosed
+      *controls*. So recognition drives the judgement regardless of the true
+      label: notability leakage, not label leakage. Scoring on all items
+      (1.74x) overstates; 1.46x is the honest figure.
+
+- [ ] **The finding that should drive product design: ambiguity is common,
+      disputes are rare.** ~30% of *non-disputed* markets carry visible
+      listing-time ambiguity. At a ~0.1% dispute base rate, a perfect binary
+      ambiguity screen would flag roughly a third of the corpus to catch under
+      half the disputes. **Text ambiguity alone cannot be the headline claim.**
+- [ ] **Note what the design deliberately controlled away.** Controls were
+      matched on volume band, so this measures text's marginal contribution
+      *holding stakes constant*. That is the right question for "does text
+      carry signal" but it understates a product combining text with stakes —
+      and stakes is the stronger known predictor. Re-run unmatched, and
+      conditioned on `volume_decile`, once labels land.
+- [ ] **Aim linter v2 / Phase 1 at the discriminating kinds, not at ambiguity
+      in general.** Among `yes` judgements (ex-disclosed): `subj` 3 contested /
+      0 control, `oth` 4/1, `edge` 11/8, `src` 7/9, `thr` 5/7. Only the first
+      two lean contested; `src` and `thr` are near-even and would add noise.
+      Small n — treat as a direction, not weights.
 
 ## P1 — Phase 0 hardening (before anything is shown publicly)
 

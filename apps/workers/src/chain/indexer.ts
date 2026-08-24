@@ -207,6 +207,37 @@ export function decodeOoLogs(raw: RpcLog[]): DecodedLog[] {
   return out;
 }
 
+/**
+ * Seed a chain's cursor so the next run resumes from `block` instead of the
+ * 2024 boundary. Same discipline as `resetChainCursor` (ADR-0013): an auditable
+ * code path rather than a hand DB edit, with the reason recorded.
+ *
+ * Used to skip a range already known to be completely indexed. That is only
+ * safe when the *adapter set* was unchanged over the skipped range — the reason
+ * the cursor was reset in the first place was that the old checkpoint predated
+ * the V4 adapters. Verify before using: the earliest V4-resolved market was
+ * listed 2025-08-08, while the dead sweep's coverage ends 2024-09-17, so no V4
+ * history exists below it.
+ */
+export async function setChainCursor(
+  db: Db,
+  chain: ChainName,
+  block: bigint,
+  reason: string,
+): Promise<{ chain: ChainName; key: string; block: string; previousBlock: string | null }> {
+  const key = chainStateKey(chain);
+  const previous = await getStateBlock(db, key);
+  await setStateBlock(db, key, block);
+  await appendAudit(db, {
+    actor: ACTOR,
+    action: "index.cursor.set",
+    entity: "chain",
+    entityId: chain,
+    payload: { key, block: block.toString(), previousBlock: previous?.toString() ?? null, reason },
+  });
+  return { chain, key, block: block.toString(), previousBlock: previous?.toString() ?? null };
+}
+
 async function getStateBlock(db: Db, key: string): Promise<bigint | null> {
   const rows = await db.select().from(ingestState).where(eq(ingestState.key, key));
   const value = rows[0]?.value as { lastBlock?: string } | undefined;

@@ -12,7 +12,7 @@ import {
 } from "viem";
 import { auditLog, createDb, ingestState, verifyAuditChain, type DbHandle } from "@verdict/schema";
 import { forEachAdaptiveRange, makeClient } from "../src/chain/client.ts";
-import { chainStateKey, decodeOoLogs, resetChainCursor } from "../src/chain/indexer.ts";
+import { chainStateKey, decodeOoLogs, resetChainCursor, setChainCursor } from "../src/chain/indexer.ts";
 import {
   ETHEREUM_CONTRACTS,
   OO_EVENT_TOPICS,
@@ -297,6 +297,24 @@ describe("resetChainCursor (PGlite)", () => {
       .where(and(eq(auditLog.action, "index.cursor.reset"), eq(auditLog.entityId, "polygon")));
     expect(audit).toHaveLength(1);
     expect(await verifyAuditChain(handle.db)).toBeNull(); // hash chain intact
+  });
+
+  it("setChainCursor seeds a resume point and records the reason", async () => {
+    const result = await setChainCursor(handle.db, "polygon", 61_900_000n, "range already fully indexed");
+    expect(result.block).toBe("61900000");
+    const stored = await handle.db
+      .select()
+      .from(ingestState)
+      .where(eq(ingestState.key, chainStateKey("polygon")));
+    expect((stored[0]?.value as { lastBlock: string }).lastBlock).toBe("61900000");
+    // The reason is the point: skipping a range on a wrong assumption leaves a
+    // silent hole, so the justification has to be on the record.
+    const audit = await handle.db
+      .select()
+      .from(auditLog)
+      .where(and(eq(auditLog.action, "index.cursor.set"), eq(auditLog.entityId, "polygon")));
+    expect(audit).toHaveLength(1);
+    expect(await verifyAuditChain(handle.db)).toBeNull();
   });
 
   it("is a no-op when no cursor is stored", async () => {

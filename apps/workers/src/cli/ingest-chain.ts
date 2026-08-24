@@ -1,7 +1,7 @@
 import { parseArgs } from "node:util";
 import { createDb, databaseUrlFromEnv, loadEnv } from "@verdict/schema";
 import type { ChainName } from "../chain/client.ts";
-import { indexEthereum, indexPolygon, resetChainCursor } from "../chain/indexer.ts";
+import { indexEthereum, indexPolygon, resetChainCursor, setChainCursor } from "../chain/indexer.ts";
 import { logger } from "../lib/log.ts";
 
 loadEnv();
@@ -14,6 +14,11 @@ const { values } = parseArgs({
     // from the 2024 boundary instead of resuming. Needed after the adapter set
     // changes (ADR-0012): a resumed run would skip history below the cursor.
     "reset-cursor": { type: "boolean", default: false },
+    // Resume from an explicit block instead. Use to skip a range already known
+    // to be fully indexed under an unchanged adapter set — needs the reason
+    // stated, because getting it wrong leaves a silent hole in the dataset.
+    "from-block": { type: "string" },
+    reason: { type: "string" },
   },
 });
 
@@ -35,6 +40,18 @@ try {
   if (values["reset-cursor"]) {
     for (const chain of chains) {
       logger.info(await resetChainCursor(handle.db, chain), "chain cursor reset");
+    }
+  }
+  if (values["from-block"] !== undefined) {
+    if (!values.reason) {
+      logger.error("--from-block requires --reason: skipping a range silently is how a dataset gets a hole");
+      process.exit(1);
+    }
+    for (const chain of chains) {
+      logger.info(
+        await setChainCursor(handle.db, chain, BigInt(values["from-block"]), values.reason),
+        "chain cursor set",
+      );
     }
   }
   for (const chain of chains) {
