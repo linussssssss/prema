@@ -185,6 +185,40 @@ const RATE_LIMITED = /\b429\b|too many requests|rate limit|throttl/i;
  */
 const TRANSIENT_NETWORK = /ENOTFOUND|EAI_AGAIN|ECONNRESET|ECONNREFUSED|ETIMEDOUT|EPIPE|ENETUNREACH|fetch failed|socket hang up/i;
 
+/**
+ * The provider is up but declining to serve right now — Infura's
+ * `-32603 service temporarily unavailable`, 502/503/504. The request was fine;
+ * the far side was busy. Same response as a network fault: wait, retry at the
+ * same width. Shrinking would work too but throws away the learned ceiling for
+ * a reason that has nothing to do with the range.
+ *
+ * Fourth unclassified error to kill a sweep in two days (block ~82.6M,
+ * 2026-08-24), which is what prompted the inversion below.
+ */
+const SERVER_TRANSIENT =
+  /service (temporarily )?unavailable|temporarily unavailable|bad gateway|gateway time-?out|status:\s*50[0234]\b|-32603/i;
+
+/** Providers disagree on how a too-big getLogs reads: Infura says "more than
+ *  10000 results", others say "block range", PublicNode returns a bare
+ *  InvalidParams, viem's own TimeoutError says "took too long". */
+const RANGE_ERROR =
+  /10000|10,000|range|too large|response size|limit|timeout|timed out|took too long|more than|invalid param/i;
+
+/**
+ * Errors where neither shrinking the range nor waiting can help, so the run
+ * should stop and say so. Everything not listed here is retried.
+ *
+ * Kept short on purpose. The failure mode this whole classifier keeps hitting
+ * is over-confidence about which errors are which, and the asymmetry is stark:
+ * wrongly retrying a fatal error wastes seconds, wrongly failing a transient
+ * one throws away hours of a resumable sweep.
+ */
+function isFatal(err: unknown, msg: string): boolean {
+  // A bug in our own code. Retrying cannot fix it and hiding it is worse.
+  if (err instanceof TypeError || err instanceof ReferenceError || err instanceof SyntaxError) return true;
+  return /status:\s*40[13]\b|invalid api key|unauthorized|forbidden|ENOSPC|no space left|heap out of memory/i.test(msg);
+}
+
 const sleep = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
 
 /**
@@ -215,6 +249,9 @@ export async function forEachAdaptiveRange(
     maxRateLimitRetries?: number;
     /** Network-outage retries. Default 40 with a 5-minute cap ≈ 3h tolerated. */
     maxNetworkRetries?: number;
+    /** Consecutive UNRECOGNISED errors tolerated before giving up. Low by
+     *  design: a deterministic failure exhausts it in seconds. */
+    maxUnknownRetries?: number;
   },
   fetchChunk: (chunk: LogRange) => Promise<void>,
 ): Promise<void> {
@@ -224,11 +261,13 @@ export async function forEachAdaptiveRange(
   const backoffMs = opts.backoffMs ?? 2_000;
   const maxRateLimitRetries = opts.maxRateLimitRetries ?? 8;
   const maxNetworkRetries = opts.maxNetworkRetries ?? 40;
+  const maxUnknownRetries = opts.maxUnknownRetries ?? 5;
   let span = opts.initialSpan;
   let ceiling: bigint | null = null;
   let streak = 0;
   let rateLimitHits = 0;
   let networkHits = 0;
+  let unknownHits = 0;
   let from = range.fromBlock;
   while (from <= range.toBlock) {
     const to = from + span - 1n > range.toBlock ? range.toBlock : from + span - 1n;
@@ -238,6 +277,7 @@ export async function forEachAdaptiveRange(
       streak += 1;
       rateLimitHits = 0; // fresh backoff budget for the next throttle
       networkHits = 0;
+      unknownHits = 0;
       if (ceiling !== null && streak >= relaxAfter) {
         ceiling = (ceiling * 5n) / 4n;
         streak = 0;
@@ -269,7 +309,7 @@ export async function forEachAdaptiveRange(
       // Checked before the range test on purpose: "timeout" appears in both
       // patterns, but a request that never left the machine is not evidence
       // that the range was too wide.
-      if (TRANSIENT_NETWORK.test(msg)) {
+      if (TRANSIENT_NETWORK.test(msg) || SERVER_TRANSIENT.test(msg)) {
         if (networkHits >= maxNetworkRetries) throw err;
         // Capped exponential: quick retries for a blip, then a steady 5-minute
         // poll so a long outage (a sleeping laptop) is waited out rather than
@@ -293,15 +333,40 @@ export async function forEachAdaptiveRange(
       // socket-level ETIMEDOUT is caught above. Matching only the token
       // "timeout" missed both phrasings and killed the sweep at block 82.59M
       // on 2026-08-24.
-      const rangeError =
-        /10000|10,000|range|too large|response size|limit|timeout|timed out|took too long|more than|invalid param/i.test(
-          msg,
+      const rangeError = RANGE_ERROR.test(msg);
+
+      // Anything that shrinking or waiting cannot fix. Deliberately short and
+      // explicit: this is the ONLY path that ends the run.
+      if (isFatal(err, msg)) throw err;
+
+      // Everything else shrinks and retries, including errors we do not
+      // recognise. This default is inverted from the original, and the reason
+      // is the scoreboard: three separate unrecognised errors (a 429, an
+      // ENOTFOUND, a viem TimeoutError) each killed a multi-hour resumable
+      // sweep in two days, and each was fixed only by reading a crash log and
+      // adding another pattern. A resumable job has little to lose from
+      // over-retrying and a great deal to lose from dying at 70%.
+      //
+      // The budget is what keeps a genuinely deterministic failure from
+      // looping: an error that recurs at every span exhausts it in seconds and
+      // is rethrown intact.
+      if (!rangeError) {
+        unknownHits += 1;
+        if (unknownHits > maxUnknownRetries) throw err;
+        // error, not warn: an unrecognised failure being silently absorbed is
+        // its own hazard, and this is how the next pattern gets found.
+        logger.error(
+          { label: opts.label, attempt: unknownHits, span: span.toString(), err: msg.slice(0, 300) },
+          "unrecognised error; shrinking and retrying — classify this if it repeats",
         );
-      if (!rangeError || span <= minSpan) throw err;
+      }
+      if (span <= minSpan) throw err;
       ceiling = span;
       streak = 0;
       span = span / 2n < minSpan ? minSpan : span / 2n;
-      logger.warn({ label: opts.label, span: span.toString(), err: msg.slice(0, 160) }, "shrinking getLogs span");
+      if (rangeError) {
+        logger.warn({ label: opts.label, span: span.toString(), err: msg.slice(0, 160) }, "shrinking getLogs span");
+      }
     }
   }
 }

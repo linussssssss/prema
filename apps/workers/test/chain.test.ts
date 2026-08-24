@@ -217,12 +217,86 @@ describe("forEachAdaptiveRange", () => {
     ).rejects.toThrow("429");
   });
 
-  it("rethrows non-range errors", async () => {
+  it("waits out a provider that is temporarily unavailable", async () => {
+    // Infura -32603 "service temporarily unavailable": the provider is up but
+    // declining. The request was fine, so retry at the same width rather than
+    // shrinking — shrinking would poison the learned ceiling for a reason that
+    // has nothing to do with the range. Killed a sweep at ~82.6M on 2026-08-24.
+    const spans: bigint[] = [];
+    let down = 2;
+    await forEachAdaptiveRange(
+      { fromBlock: 0n, toBlock: 999n },
+      { initialSpan: 500n, minSpan: 64n, backoffMs: 1 },
+      async (c) => {
+        if (down > 0) {
+          down -= 1;
+          throw new Error("RPC Request failed.\n\nDetails: service temporarily unavailable\nVersion: viem@2.55.19");
+        }
+        spans.push(c.toBlock - c.fromBlock + 1n);
+      },
+    );
+    expect(down).toBe(0);
+    expect(spans[0]).toBe(500n); // same width, not halved
+    expect(spans.reduce((a, b) => a + b, 0n)).toBe(1000n);
+  });
+
+  it("retries an UNRECOGNISED error instead of dying", async () => {
+    // The inversion (ADR-0021). Three unrecognised errors killed three
+    // multi-hour resumable sweeps in two days — a 429, an ENOTFOUND, a viem
+    // TimeoutError — each fixed only by reading a crash log and adding a
+    // pattern. An error we have never seen must cost a chunk, not the job.
+    const spans: bigint[] = [];
+    let odd = true;
+    await forEachAdaptiveRange(
+      { fromBlock: 0n, toBlock: 999n },
+      { initialSpan: 1000n, minSpan: 64n, backoffMs: 1 },
+      async (c) => {
+        if (odd) {
+          odd = false;
+          throw new Error("something nobody has classified yet");
+        }
+        spans.push(c.toBlock - c.fromBlock + 1n);
+      },
+    );
+    expect(odd).toBe(false);
+    expect(spans.reduce((a, b) => a + b, 0n)).toBe(1000n); // still complete coverage
+  });
+
+  it("gives up on an unrecognised error that keeps recurring", async () => {
+    // The budget is what stops a deterministic failure looping forever, and it
+    // must rethrow the ORIGINAL error so the cause is still diagnosable.
+    let attempts = 0;
     await expect(
-      forEachAdaptiveRange({ fromBlock: 0n, toBlock: 9n }, { initialSpan: 10n }, async () => {
-        throw new Error("insufficient funds");
-      }),
-    ).rejects.toThrow("insufficient funds");
+      forEachAdaptiveRange(
+        { fromBlock: 0n, toBlock: 999n },
+        { initialSpan: 1000n, minSpan: 1n, backoffMs: 1, maxUnknownRetries: 3 },
+        async () => {
+          attempts += 1;
+          throw new Error("deterministic mystery");
+        },
+      ),
+    ).rejects.toThrow("deterministic mystery");
+    expect(attempts).toBeLessThanOrEqual(5); // seconds, not hours
+  });
+
+  it("still fails fast on errors that retrying cannot fix", async () => {
+    // Bad credentials, no disk, and our own bugs. These are the only things
+    // that should end a resumable run.
+    for (const boom of [
+      () => {
+        throw new Error("HTTP request failed. Status: 401 Unauthorized");
+      },
+      () => {
+        throw new Error("ENOSPC: no space left on device");
+      },
+      () => {
+        throw new TypeError("x is not a function");
+      },
+    ]) {
+      await expect(
+        forEachAdaptiveRange({ fromBlock: 0n, toBlock: 9n }, { initialSpan: 10n, backoffMs: 1 }, async () => boom()),
+      ).rejects.toThrow();
+    }
   });
 });
 
