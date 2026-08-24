@@ -18,15 +18,30 @@ better number or acts on it, and the plan branches on what it says.
 
 ## Start this now, whatever else happens
 
-**The re-poll worker is time-gated, not effort-gated.** A one-pass crawl sees
-each market once, so `rules_edited_after_listing` — one of four label
-components — reads ~0 and will keep reading ~0 until something polls open
-markets repeatedly *over calendar time*. Every week it isn't running is a week
-of signal that cannot be backfilled later.
+**The re-poll worker is already built. It has never been started.** Verified
+2026-08-24: `apps/workers/src/cli/worker.ts` schedules `gamma-repoll-open`
+every 6h and `clob-snapshot` hourly, and `ingestPass` explicitly re-crawls from
+the start when a cursor is marked `done` — precisely to catch edits on open
+markets. The code is correct. The process has simply never run, which is why
+the database shows **0 markets with more than one rules version, max
+`version_num` = 1, and 0 CLOB snapshots**.
 
-It is perhaps a day of work and it should start in session 1, while the VPS
-exists, ahead of things that feel more urgent. If the VPS is destroyed after the
-backfill, this is the one job that argues for keeping it.
+So `rules_edited_after_listing` reads 0 not because the mechanism is missing
+but because nothing has been polling. Same for `price_reversal`, which needs
+`market_metrics` from the CLOB job.
+
+**This is one command, and it is time-gated rather than effort-gated.** A
+one-pass crawl sees each market once; only repeated polling *over calendar
+time* can observe an edit, and that time cannot be backfilled later. Start it on
+the VPS as soon as the backfill is done (they contend for the same 2 vCPUs):
+
+```
+pnpm --filter @verdict/workers run worker      # long-running; use tmux/systemd
+```
+
+Give it a week before expecting the label to carry signal, and treat any
+non-zero count as the first evidence that the component works at all. If the
+VPS is destroyed after the backfill, this is the job that argues for keeping it.
 
 ---
 
