@@ -45,7 +45,7 @@ const BATCH = 20_000;
 export function extractAncillaryDescription(ancillary: string): string | null {
   const start = ancillary.indexOf("description:");
   if (start === -1) return null;
-  let body = ancillary.slice(start + "description:".length);
+  const body = ancillary.slice(start + "description:".length);
 
   // Trailing metadata. `market_id:` precedes `res_data:` when both are present;
   // take the earliest marker that actually appears.
