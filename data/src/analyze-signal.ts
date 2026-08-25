@@ -92,6 +92,7 @@ export interface SignalReport {
   labelled: number;
   contested: number;
   disputed: number;
+  resolvedNa: number;
   byDecile: Array<{ decile: number; n: number; contested: number; disputed: number }>;
   byRule: RuleLift[];
   byRuleTopDecile: RuleLift[];
@@ -102,7 +103,7 @@ export interface SignalReport {
 /** One row per market: latest label, listing-time flags, volume decile. */
 const BASE = sql`
   with latest_label as (
-    select distinct on (market_id) market_id, contested, disputed
+    select distinct on (market_id) market_id, contested, disputed, resolved_na
     from ambiguity_labels order by market_id, id desc
   ),
   v1 as (
@@ -115,6 +116,7 @@ const BASE = sql`
            ntile(10) over (order by m.volume_usd::double precision nulls first) as decile,
            l.contested,
            l.disputed,
+           l.resolved_na,
            v1.rules_version_id
     from markets m
     join latest_label l on l.market_id = m.id
@@ -122,7 +124,8 @@ const BASE = sql`
   )`;
 
 /**
- * `contested` is currently ~99.7% `resolved_na`, and that label is
+ * `contested` is overwhelmingly `resolved_na` (the exact share is computed and
+ * printed, not assumed — it was ~99.7% pre-backfill and 95.5% after), and that label is
  * near-tautologically linked to some rules: `no-na-condition` detects text that
  * never mentions N/A, so the markets it flags mostly *cannot* resolve N/A. Lift
  * against `contested` therefore measures voidability, not dispute risk.
@@ -186,13 +189,20 @@ async function liftFor(
 
 /** Returns null when nothing is labelled yet — the backfill has not run. */
 export async function analyzeSignal(db: Db): Promise<SignalReport | null> {
-  const [totals] = rowsOf<{ markets: number; labelled: number; contested: number; disputed: number }>(
+  const [totals] = rowsOf<{
+    markets: number;
+    labelled: number;
+    contested: number;
+    disputed: number;
+    resolvedNa: number;
+  }>(
     await db.execute(sql`
       ${BASE}
       select count(*)::int as markets,
              count(contested)::int as labelled,
              count(*) filter (where contested)::int as contested,
-             count(*) filter (where disputed)::int as disputed
+             count(*) filter (where disputed)::int as disputed,
+             count(*) filter (where resolved_na)::int as "resolvedNa"
       from base`),
   );
   if (!totals || totals.labelled === 0) return null;
@@ -258,8 +268,9 @@ export function formatReport(r: SignalReport): string {
   out.push("  (where the stakes are; a rule useless corpus-wide may still rank here)");
   table(r.byRuleTopDecile);
   out.push("\n=== 4. per-rule lift against `disputed` ALONE ===");
+  const naShare = r.contested === 0 ? "0%" : pct(r.resolvedNa, r.contested);
   out.push(
-    "  `contested` is ~99.7% resolved_na, which is near-tautologically tied to some\n" +
+    `  \`contested\` is ${naShare} resolved_na, which is near-tautologically tied to some\n` +
       "  rules (no-na-condition flags text that never mentions N/A, so those markets\n" +
       "  largely cannot resolve N/A). This cut is the one the thesis is about.",
   );
@@ -273,7 +284,7 @@ export function formatReport(r: SignalReport): string {
       "    firing more on Politics than Sports gets pooled lift for free. On\n" +
       "    2026-08-24 `status-verb-gap` read 20.66x pooled and 1.08x within Politics.\n" +
       "  · Lift near 1.0 means the rule carries no information.\n" +
-      "  · Prefer §4 over §2 until `disputed` is fully populated — §2 is ~99.7%\n" +
+      `  · Prefer §4 over §2 until \`disputed\` is fully populated — §2 is ${naShare}\n` +
       "    resolved_na, which measures voidability, not dispute risk.\n" +
       "  · §3 matters more than §2 for a watchlist, which ranks within the markets\n" +
       "    people actually trade.",

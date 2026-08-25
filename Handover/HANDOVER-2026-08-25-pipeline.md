@@ -1,7 +1,7 @@
 # HANDOVER — pipeline session, 2026-08-24 → 25
 
 Read this first. `STATUS.md` has durable state, `TODO.md` the backlog,
-`docs/DECISIONS.md` the decisions (ADR-0001..0021). This file is only what those
+`docs/DECISIONS.md` the decisions (ADR-0001..0022). This file is only what those
 don't carry: what's running, what broke, and what turned out to be wrong.
 
 ## In flight right now
@@ -145,6 +145,60 @@ should drop those flags** to pick up markets closed since 2026-08-24; a partial
 gamma pass was interrupted mid-way (~21k markets upserted), so the venue side is
 one day stale and slightly ragged, which is fine for labels but should be
 completed before any published number.
+
+## The gating question, answered: no
+
+`ROADMAP-next-sessions.md` said everything downstream depended on whether
+`vague-source`'s **2.02x** stratified lift survived at ~21x more positives.
+Full corpus, 2,615,958 markets labelled, 44,726 contested (1.71%), 2,089
+disputed:
+
+    §4 disputed alone, by-category (Mantel-Haenszel — the column to trust)
+      vague-source        1.57x    (was 2.02x)
+      status-verb-gap     1.40x    (pooled 7.41x, flagged composition)
+      hedge-words         1.27x
+      no-na-condition     1.09x
+      deadline-no-tz      0.35x
+      occurrence-vs-rep   0.00x    (1,974 fires, zero disputes)
+
+    §3 top volume decile, by-category
+      hedge-words         2.40x    vague-source 1.61x    status-verb-gap 1.50x
+
+**It did not hold.** 1.57x corpus-wide, 1.61x in the top decile. Directionally
+positive, materially weaker, and consistent with every other measurement we
+have — the blind study's matched 1.46x most of all. Three independent methods
+now agree the text signal is real and modest. That is the finding; it should
+stop being re-litigated each session.
+
+Two rules of seven carry nothing: `occurrence-vs-reporting` (1,974 fires, zero
+disputes, zero contested) and `outcomes-not-exhaustive` (structurally
+unreachable, ADR pending). `hedge-words` fires on 1,498,344 markets — 57% of the
+corpus — so its 1.27x cannot rank a watchlist even though it is positive.
+
+**The decile table confirms ADR-0020 at full scale.** The two components of
+`contested` move in opposite directions with volume: contested is 4.13% in d1
+and 0.73% in d10, while disputed climbs monotonically 0.030% -> 0.402%. Pooling
+them into one target averages a voidability signal against a dispute signal.
+`contested` is 95.5% `resolved_na` (was ~99.7% pre-backfill — the analysis now
+computes and prints this share rather than hardcoding it).
+
+### Two numbers that need reading carefully
+
+**`escalated` is 6 markets.** Not a bug and not my refactor: SQL confirms
+exactly 6 dispute timestamps match a DVM vote time, and there are only 3,359
+distinct vote request times across 2,023,767 vote rows. So `escalated`
+contributes ~nothing to `contested`, and `rules_edited_after_listing`
+contributes zero until the worker has run for weeks. **The composite label is
+currently just `resolved_na OR disputed`.** Worth deciding whether the ADR-0008
+timestamp join is the right mechanism at all — in UMA OOv2 a disputed request
+normally *does* reach the DVM, so 6/4,127 suggests either MOOv2 resolves
+disputes off the DVM path or the join is wrong.
+
+**38% of disputes never reach a market.** 1,561 of 4,127 dispute events have a
+questionId matching no market (62.2% join rate; `QuestionInitialized` is 69.8%).
+`validate` already flags this as a P0 — it is the single highest-value fix left,
+because it would take `disputed` from 2,089 markets to ~3,400 and firm up every
+estimate in §4.
 
 ## Shipped
 
