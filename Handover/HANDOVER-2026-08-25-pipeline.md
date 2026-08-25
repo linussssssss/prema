@@ -84,6 +84,68 @@ inverts the default so an unrecognised error costs a chunk, not the job.
 - Commit messages go through a file (`git commit -F`) — double quotes inside
   PowerShell here-strings break argument quoting, which cost three retries.
 
+## 2026-08-25 — backfill landed, then the build OOM'd
+
+**Both chains are complete.** Polygon: 9,496,937 events, cursor at head
+(92,626,114). Ethereum: 4,141 events + 2,023,767 votes, blocks
+18,908,895–25,830,831. Linter: 2,615,958 versions, **5,670,580 hits** at
+v1.1.0 (v1.0.0 was 5,183,533 — the two new rules add ~487k).
+
+**The sanity gate passes.** 4,127 disputes total, **1,509 in Jan–May 2026**
+against a >1,000 threshold. My pre-run estimate of 2,000–2,600 was inflated:
+the sampled *rate* was right (0.18–0.26 per 1k blocks vs 0.233 actual), the
+extrapolation off it was not. Oracle split — `moov2 ProposePrice` 1,795,686,
+`moov2 Settle` 1,794,972, `ctf_adapter_v4 QuestionInitialized` 1,527,795 —
+which is ADR-0014 (the checksum bug) vindicated: those 1.5M V4 rows were the
+ones the mis-cased address had been silently hiding.
+
+**Then `dataset:build` aborted with exit 134** (SIGABRT = JS heap OOM), in
+`computeLabels`, on a 4 GB box. Cause and fix in ADR-0022. Short version: a
+query written when the events table had 56,833 rows was still loading all
+1,958,963 `Settle` events — **5,063 MB of `args`**, because MOOv2 settles carry
+full ancillaryData — to serve lookups for 4,127 disputes. ADR-0019 streamed the
+*market* side of that function and left the event side alone, correctly at the
+time; the backfill grew it 167x.
+
+Fixed by bounding each query by the join it feeds rather than the table it
+reads: settles fetched by disputed questionId (1,958,963 → 7,095), DVM times
+reduced to distinct epochs in SQL instead of pulling ~2M vote rows, payout
+vectors prefiltered in SQL (~86k of 3.4M) with `isFiftyFifty` still deciding,
+and the two corpus-wide 2.6M-entry id maps deleted in favour of on-demand
+lookups.
+
+**Trap worth knowing:** the event-side loads are the ones that scale with the
+backfill, and they were invisible while the chain tables were empty. If a build
+step OOMs again, check `sum(pg_column_size(args))` per `event_name` before
+anything else — `Settle` is 5 GB, `QuestionResolved` 281 MB, and the row counts
+alone do not tell you that.
+
+**Verified before coding, not assumed:** every `DisputePrice`/`Settle` has a
+questionId and timestamp; payout vectors are exactly three shapes, and the
+86,234 `["1","1"]` rows are all of on-chain `resolved_na`.
+
+**Second quoting trap, after the `git commit -F` one:** shell scripts destined
+for the VPS must be written with a heredoc, not the editor — the Write tool
+emits a UTF-8 BOM and CRLF, and bash answers with
+`` `$'do'` `` syntax errors. Same failure family as the `Set-Content -Encoding
+utf8` BOM that broke `package.json`. And when passing a command through
+PowerShell to `ssh`, `$(...)` and `|` are interpreted by PowerShell first; pipe
+the script over stdin (`Get-Content x.sh | ssh host "bash -s"`) instead of
+escaping through two layers.
+
+### How to check / resume the running build
+
+    ssh root@167.233.166.121
+    tmux attach -t backfill3          # detach with ctrl-b then d
+    tail -f ~/build-2026-08-25.log
+
+It is running with `DATASET_SKIP_GAMMA=1 DATASET_SKIP_CHAIN=1`, since both
+stages are already at head — that skips ~2h of no-op re-ingest. **A later run
+should drop those flags** to pick up markets closed since 2026-08-24; a partial
+gamma pass was interrupted mid-way (~21k markets upserted), so the venue side is
+one day stale and slightly ragged, which is fine for labels but should be
+completed before any published number.
+
 ## Shipped
 
 Linter: `template-residue` (9.26% fire rate), `announcement-vs-report` (0.006%,
