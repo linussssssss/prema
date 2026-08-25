@@ -46,18 +46,38 @@ async function resolveMarketIds(
   db: Db,
   questionIds: readonly (string | null)[],
   conditionIds: readonly (string | null)[],
-): Promise<{ byQuestionId: Map<string, string>; byConditionId: Map<string, string> }> {
+): Promise<{
+  byQuestionId: Map<string, string>;
+  byConditionId: Map<string, string>;
+  byNegRiskRequestId: Map<string, string>;
+}> {
   const byQuestionId = new Map<string, string>();
   const byConditionId = new Map<string, string>();
+  const byNegRiskRequestId = new Map<string, string>();
 
   const qids = [...new Set(questionIds.filter(isNonNull))];
   for (let i = 0; i < qids.length; i += LOOKUP_BATCH) {
+    const slice = qids.slice(i, i + LOOKUP_BATCH);
     const rows = await db
       .select({ id: markets.id, questionId: markets.questionId })
       .from(markets)
-      .where(inArray(markets.questionId, qids.slice(i, i + LOOKUP_BATCH)))
+      .where(inArray(markets.questionId, slice))
       .orderBy(asc(markets.id));
     for (const m of rows) if (m.questionId) byQuestionId.set(m.questionId, m.id);
+
+    // Negative-risk markets never match on questionId — see ADR-0024. The
+    // neg-risk adapters mint their own question ids, and the CTF condition is
+    // prepared in a separate transaction we do not index, so neither id in the
+    // event reaches a market. Gamma hands us the same id as
+    // `negRiskRequestId`, and it matches on-chain 505,554/505,554.
+    const negRows = await db
+      .select({ id: markets.id, negRiskRequestId: markets.negRiskRequestId })
+      .from(markets)
+      .where(inArray(markets.negRiskRequestId, slice))
+      .orderBy(asc(markets.id));
+    for (const m of negRows) {
+      if (m.negRiskRequestId) byNegRiskRequestId.set(m.negRiskRequestId, m.id);
+    }
   }
 
   const cids = [...new Set(conditionIds.filter(isNonNull))];
@@ -70,7 +90,7 @@ async function resolveMarketIds(
     for (const m of rows) if (m.conditionId) byConditionId.set(m.conditionId, m.id);
   }
 
-  return { byQuestionId, byConditionId };
+  return { byQuestionId, byConditionId, byNegRiskRequestId };
 }
 
 export interface LabelStats {
@@ -216,13 +236,13 @@ export async function computeLabels(db: Db): Promise<LabelStats> {
 
   const disputedMarketIds = new Set<string>();
   const escalatedMarketIds = new Set<string>();
-  const { byQuestionId: disputeMarketByQid } = await resolveMarketIds(
-    db,
-    disputeEvents.map((e) => e.questionId),
-    [],
-  );
+  const disputeLookup = await resolveMarketIds(db, disputeEvents.map((e) => e.questionId), []);
   for (const [key, e] of disputeByKey) {
-    const marketId = e.questionId ? (disputeMarketByQid.get(e.questionId) ?? null) : null;
+    const marketId = e.questionId
+      ? (disputeLookup.byQuestionId.get(e.questionId) ??
+         disputeLookup.byNegRiskRequestId.get(e.questionId) ??
+         null)
+      : null;
     if (marketId) disputedMarketIds.add(marketId);
     const settle = settleByKey.get(key);
     const requestTime = Number(e.args.timestamp ?? NaN);
@@ -291,6 +311,7 @@ export async function computeLabels(db: Db): Promise<LabelStats> {
     const marketId =
       (e.conditionId && naLookup.byConditionId.get(e.conditionId)) ||
       (e.questionId && naLookup.byQuestionId.get(e.questionId)) ||
+      (e.questionId && naLookup.byNegRiskRequestId.get(e.questionId)) ||
       null;
     if (marketId) naMarketIds.add(marketId);
   }

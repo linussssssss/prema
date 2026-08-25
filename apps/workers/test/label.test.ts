@@ -47,6 +47,19 @@ describe("computeLabels (PGlite end-to-end)", () => {
       { ...base, id: "polymarket:m3", externalId: "m3", question: "na market", questionId: "0xq3", conditionId: "0xc3" },
       { ...base, id: "polymarket:m4", externalId: "m4", question: "edited market", questionId: "0xq4", conditionId: "0xc4" },
       { ...base, id: "polymarket:m5", externalId: "m5", question: "escalated market", questionId: "0xq5", conditionId: "0xc5" },
+      // Negative-risk: the on-chain question id reaches this market only via
+      // negRiskRequestId. Its own questionId/conditionId match nothing on
+      // chain, which is exactly the ADR-0024 shape.
+      {
+        ...base,
+        id: "polymarket:m6",
+        externalId: "m6",
+        question: "neg-risk market",
+        questionId: "0xq6",
+        conditionId: "0xc6",
+        negRisk: true,
+        negRiskRequestId: "0xnr6",
+      },
     ]);
 
     const ver = (marketId: string, versionNum: number, text: string) => ({
@@ -100,6 +113,17 @@ describe("computeLabels (PGlite end-to-end)", () => {
         questionId: "0xqUnrelated",
         args: { timestamp: "1717243200", price: "1000000000000000000" },
       },
+      // m6: disputed, reachable only through negRiskRequestId
+      {
+        ...evBase,
+        contractAddress: "0xnegrisk",
+        oracle: "moov2",
+        eventName: "DisputePrice",
+        txHash: "0xt6",
+        logIndex: 1,
+        questionId: "0xnr6",
+        args: { timestamp: "1717243900", proposedPrice: "0", proposer: "0xP", disputer: "0xD" },
+      },
       // m3: resolved 50/50 on-chain
       {
         ...evBase,
@@ -141,12 +165,12 @@ describe("computeLabels (PGlite end-to-end)", () => {
 
   it("computes the composite contested label", async () => {
     const stats = await computeLabels(handle.db);
-    expect(stats.marketsLabeled).toBe(5);
-    expect(stats.disputedMarkets).toBe(2); // m2, m5
+    expect(stats.marketsLabeled).toBe(6);
+    expect(stats.disputedMarkets).toBe(3); // m2, m5, m6 (m6 only via negRiskRequestId)
     expect(stats.escalatedMarkets).toBe(1); // m5
     expect(stats.resolvedNaMarkets).toBe(1); // m3
     expect(stats.rulesEditedMarkets).toBe(1); // m4
-    expect(stats.contestedMarkets).toBe(4); // all but m1
+    expect(stats.contestedMarkets).toBe(5); // all but m1
 
     const labelOf = async (id: string) => {
       const rows = await handle.db
@@ -168,10 +192,17 @@ describe("computeLabels (PGlite end-to-end)", () => {
     expect(m5.escalated).toBe(true);
 
     const disputeRows = await handle.db.select().from(disputes);
-    expect(disputeRows).toHaveLength(2);
+    expect(disputeRows).toHaveLength(3);
     const m2Dispute = disputeRows.find((d) => d.marketId === "polymarket:m2")!;
     expect(m2Dispute.settledPrice).toBe("0");
     expect(m2Dispute.escalated).toBe(false);
+
+    // ADR-0024: a neg-risk dispute reaches its market through negRiskRequestId.
+    // Before the fix this was an orphan - the dispute row existed with a null
+    // marketId and the market was never labelled disputed.
+    expect((await labelOf("polymarket:m6")).disputed).toBe(true);
+    const m6Dispute = disputeRows.find((d) => d.questionId === "0xnr6")!;
+    expect(m6Dispute.marketId).toBe("polymarket:m6");
   });
 
   it("is idempotent: rerun appends no new label rows and keeps the audit chain intact", async () => {

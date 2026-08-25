@@ -643,3 +643,51 @@ next to the number so it cannot be quoted bare.
 
 This does not rescue the text thesis; it relocates the product. See the
 handover for what it implies commercially.
+
+---
+
+## ADR-0024 — Negative-risk markets join on `negRiskRequestId`, not `questionId`
+
+**Status:** accepted · 2026-08-25
+
+38% of dispute events (1,561 of 4,127) reached no market, and the loss was not
+random: `moov2` disputes matched 77.9% of the time, `oov2` only 41.4%. That
+biased every estimate computed on `disputed` toward the post-whitelist regime.
+
+**It was not a derivation bug.** 1,550 of the 1,561 orphaned question ids appear
+in `QuestionInitialized` events, and `keccak256(ancillaryData)` is verifiably the
+right derivation — a control confirmed it reproduces `ctf_adapter_v4` condition
+ids 500/500. The join rate splits cleanly by adapter instead:
+
+| Adapter | Questions | Reaching a market |
+|---|---:|---:|
+| `ctf_adapter_v4` | 1,528,857 | 96.5% |
+| `ctf_adapter_v3` | 13,380 | 97.8% |
+| `ctf_adapter_v2` | 24,474 | 95.4% |
+| `neg_risk_adapter_v4` | 467,765 | **0.0%** |
+| `neg_risk_adapter` | 132,038 | **0.0%** |
+
+**Negative-risk markets mint their own question ids.** The neg-risk adapters
+emit a `questionID` that is theirs, not the CTF's; their `QuestionInitialized`
+carries no `conditionId`; and the CTF condition is prepared in a *different
+transaction* than the one that initialises the question (checked directly on a
+receipt — it holds only USDC transfers, the MOOv2 request, and the adapter's own
+event). So neither id in the event can reach a market, and no amount of hashing
+fixes that.
+
+**The bridge was already in our database.** Gamma returns `negRiskRequestId`,
+which we have stored all along, and it is exactly the on-chain neg-risk question
+id: **505,554 of 505,554 match.** `resolveMarketIds` now looks it up alongside
+`questionId`, rescuing **1,326** of the orphaned disputes with no chain re-scan.
+
+**The near miss worth recording:** the alternative was indexing CTF
+`ConditionPreparation` — a full Polygon re-scan costing about a day — and it was
+one query away from being started. The generalisable lesson is to check what the
+venue API already told us before reaching for the chain. A related question is
+still open: 1,104,320 Gamma markets match no on-chain question at all, and this
+ADR does not explain those.
+
+Also: the first derivation probe used `abi.encode` where CTF's `getConditionId`
+uses `abi.encodePacked`, which produced a plausible hash matching nothing. It was
+caught only because the probe carried a control that was *supposed* to match.
+Probes into unfamiliar id schemes should always carry one.
