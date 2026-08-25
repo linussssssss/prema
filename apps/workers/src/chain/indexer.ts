@@ -43,10 +43,13 @@ const CONFIRMATIONS: Record<ChainName, bigint> = { polygon: 300n, ethereum: 32n 
  * 50,000 blocks hopeless in the dense recent ranges — the 2026-08-23 probe
  * burned four failed halvings (50k→25k→12.5k→6.25k) before its first success
  * at ~3k, and every one of those was a paid request that could not succeed.
- * Ethereum's VotingV2 YES_OR_NO_QUERY traffic is sparse, so it opens straight
- * at the provider cap. Both grow toward MAX_SPAN from here (ADR-0015/0016).
+ * Ethereum is NOT sparse, contrary to what this comment said until 2026-08-25:
+ * the first real VotingV2 run showed 8,000-9,500 `VoteRevealed` events per few
+ * thousand blocks — one event per voter per request, so a reveal window burst
+ * is enormous. Opening at 10,000 there just walks straight into Infura's
+ * 10k-log rule and shrinks. Both grow toward MAX_SPAN (ADR-0015/0016).
  */
-const INITIAL_SPAN: Record<ChainName, bigint> = { polygon: 4_000n, ethereum: 10_000n };
+const INITIAL_SPAN: Record<ChainName, bigint> = { polygon: 4_000n, ethereum: 2_000n };
 /**
  * Explicit, because forEachAdaptiveRange otherwise derives it as initialSpan*8.
  * 10,000 is Infura's hard `eth_getLogs` block-range cap, measured 2026-08-23:
