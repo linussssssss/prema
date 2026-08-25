@@ -6,9 +6,14 @@
 #
 # This binding is what actually protects you, not a host firewall — Docker
 # writes iptables rules directly and routinely bypasses ufw.
+# `restart: unless-stopped` on every service is load-bearing, not boilerplate:
+# unattended-upgrades reboots this box, and the recurring worker has to survive
+# that. Without it the containers stay down after a reboot and the worker
+# crash-loops against a database that will never come back.
 services:
   postgres:
     image: pgvector/pgvector:pg16
+    restart: unless-stopped
     environment:
       POSTGRES_USER: verdict
       POSTGRES_PASSWORD: verdict
@@ -25,6 +30,7 @@ services:
 
   redis:
     image: redis:7-alpine
+    restart: unless-stopped
     ports:
       - "127.0.0.1:6379:6379"
     volumes:
@@ -32,6 +38,7 @@ services:
 
   minio:
     image: minio/minio:latest
+    restart: unless-stopped
     command: server /data --console-address ":9001"
     environment:
       MINIO_ROOT_USER: verdict
