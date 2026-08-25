@@ -175,12 +175,30 @@ disputes, zero contested) and `outcomes-not-exhaustive` (structurally
 unreachable, ADR pending). `hedge-words` fires on 1,498,344 markets — 57% of the
 corpus — so its 1.27x cannot rank a watchlist even though it is positive.
 
-**The decile table confirms ADR-0020 at full scale.** The two components of
-`contested` move in opposite directions with volume: contested is 4.13% in d1
-and 0.73% in d10, while disputed climbs monotonically 0.030% -> 0.402%. Pooling
-them into one target averages a voidability signal against a dispute signal.
-`contested` is 95.5% `resolved_na` (was ~99.7% pre-backfill — the analysis now
-computes and prints this share rather than hardcoding it).
+**Then stakes turned out to be the real signal — see ADR-0023.** Given the same
+Mantel-Haenszel treatment as the rules, the top volume decile runs **6.45x**
+against `disputed` (532 strata, pooled 9.51x), holding inside every large
+category. `disputed` climbs monotonically 0.020% -> 0.514% across deciles, a
+25.7x spread. **Stakes is about 4x the predictor text is.**
+
+Finding that required fixing a defect that had been quietly shaping every decile
+table we produced: 803,398 markets (30.7%) have no volume, and `nulls first`
+swept them whole into deciles 1-3. The old "contested falls 4.13% -> 0.73% as
+stakes rise" was mostly that artifact. Separated out, the volume-less bucket runs
+4.030% contested but 0.034% disputed — voided constantly, disputed normally,
+exactly what a market that never traded looks like — and **`contested` turns out
+to have no volume gradient at all** (0.55-0.77% flat across d3-d10). ADR-0020's
+"opposite gradients" should be read as: disputed rises steeply, contested is
+flat. `contested` is 95.5% `resolved_na` (was ~99.7% pre-backfill; the analysis
+computes and prints this now rather than hardcoding it).
+
+**The constraint that decides what this is worth:** `volume_usd` is *final*
+volume, unknown at listing time. Ranking listings by it is hindsight and breaks
+ADR-0009. It is valid as a description of where disputes concentrate, and valid
+as a *running* feature — volume-to-date on a live market — which means it
+supports a watchlist that re-ranks live markets, not a score-at-listing product.
+`analyze:signal` prints that caveat beside the number so it cannot be quoted
+bare.
 
 ### Two numbers that need reading carefully
 

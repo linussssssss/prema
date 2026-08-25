@@ -616,10 +616,18 @@ The printed table therefore read "contested falls from 4.13% at low stakes to
 missing data. Volume-less markets get a **null decile** now, never decile 1;
 `exporters.ts` already followed this rule and this file did not. Pinned by test.
 
+Separating that bucket out shows what it was hiding: the volume-less markets run
+**4.030% contested but only 0.034% disputed** — voided constantly, disputed at an
+entirely ordinary rate, which is what a market that never traded looks like. And
+with them removed, **`contested` has no volume gradient at all** (0.55–0.77%
+flat across deciles 3-10). ADR-0020 called the two labels' volume gradients
+*opposite*; the correct statement is that `disputed` rises steeply with stakes
+while `contested` is flat, and the apparent opposition was this artifact.
+
 **2. Stakes is roughly 4x the predictor text is.** On markets with known
-volume, `disputed` climbs monotonically **0.029% (d1) → 0.524% (d10)**, and the
-Mantel-Haenszel estimate for top-decile vs deciles 1-9, stratified by category,
-is **6.52x** (pooled 9.36x) across 521 strata. It holds *inside* every large
+volume, `disputed` climbs monotonically **0.020% (d1) → 0.514% (d10)**, a 25.7x
+spread, and the Mantel-Haenszel estimate for top-decile vs deciles 1-9,
+stratified by category, is **6.45x** (pooled 9.51x) across 532 strata. It holds *inside* every large
 category independently — Sports 0.034→0.271%, Crypto 0→0.606%, Bitcoin
 0.003→0.231% — so unlike the 20x rule lift of ADR-0020, this one is not
 composition. The best text rule is 1.57x.

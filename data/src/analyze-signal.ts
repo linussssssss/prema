@@ -9,7 +9,7 @@
  *  2. Per-rule lift overall — P(contested | fired) / P(contested | not fired).
  *  3. Per-rule lift inside the top volume decile, where the stakes are.
  *  3b. Stakes itself as the exposure, stratified the same way. Measured
- *     2026-08-25 this is 6.52x against `disputed` where the best text rule is
+ *     2026-08-25 this is 6.45x against `disputed` where the best text rule is
  *     1.57x — the headline finding, and the reason (4) matters more than (2).
  *  4. Per-rule lift against `disputed` alone.
  *
@@ -256,7 +256,7 @@ export async function analyzeSignal(db: Db): Promise<SignalReport | null> {
   }));
 
   // Stakes as an exposure, stratified the same way the rules are. Measured
-  // 2026-08-25 at 6.52x — about 4x anything the text rules produce.
+  // 2026-08-25 at 6.45x — about 4x anything the text rules produce.
   const volumeStrata = rowsOf<StratumRow>(
     await db.execute(sql`
       ${BASE}
@@ -342,9 +342,9 @@ export function formatReport(r: SignalReport): string {
   );
   table([r.volumeLift]);
   out.push(
-    "  Measured 2026-08-25: 6.52x stratified vs 1.57x for the best text rule —\n" +
+    "  Measured 2026-08-25: 6.45x stratified vs 1.57x for the best text rule —\n" +
       "  stakes is roughly 4x the predictor text is, and it survives stratification\n" +
-      "  across 521 category strata, so it is not composition.\n" +
+      "  across 532 category strata, so it is not composition.\n" +
       "  **But `volume_usd` is FINAL volume, which is not known at listing time.**\n" +
       "  As a listing-time feature it is hindsight and violates ADR-0009. It is\n" +
       "  legitimate only as a running feature — volume-to-date on a live market —\n" +

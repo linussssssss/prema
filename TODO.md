@@ -265,10 +265,22 @@ raises and the product changes shape. Everything in P1/P2 is downstream of it.
       `hedge-words` fires on 57% of the corpus, so its 1.27x cannot rank a
       watchlist regardless of sign.
 
-      The decile table confirms ADR-0020 at full scale: `contested` falls with
-      volume (4.13% in d1 → 0.73% in d10) while `disputed` rises monotonically
-      (0.030% → 0.402%). The composite averages a voidability signal against a
-      dispute signal, and is currently 95.5% `resolved_na`.
+      `contested` is 95.5% `resolved_na`, so §4 is the cut that matters.
+- [x] **Stratify the volume gradient — DONE 2026-08-25 (ADR-0023), and stakes
+      wins.** Top volume decile vs deciles 1-9 against `disputed`, stratified by
+      category: **6.45x** (532 strata, pooled 9.51x), holding inside every large
+      category independently. `disputed` runs 0.020% (d1) → 0.514% (d10).
+      **Stakes is ~4x the predictor text is.**
+
+      This also caught a defect in every decile table produced so far: 30.7% of
+      markets have no volume and `nulls first` swept them into deciles 1-3. The
+      old "contested falls as stakes rise" was that artifact — `contested` is
+      actually flat (0.55–0.77%) across known-volume deciles, and the
+      volume-less bucket is the outlier at 4.030% contested / 0.034% disputed.
+
+      **Do not turn this into a listing-time score.** `volume_usd` is final
+      volume, unknown at listing, so ranking listings by it is hindsight
+      (ADR-0009). It is a running watchlist feature, not a pre-listing one.
 - [ ] **Aim linter v2 / Phase 1 at the discriminating kinds, not at ambiguity
       in general.** Among `yes` judgements (ex-disclosed): `subj` 3 contested /
       0 control, `oth` 4/1, `edge` 11/8, `src` 7/9, `thr` 5/7. Only the first
