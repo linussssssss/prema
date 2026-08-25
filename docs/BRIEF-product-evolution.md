@@ -132,10 +132,39 @@ UMA introduced a **ManagedOptimisticOracleV2** with a **proposer whitelist**
 | `oov2` (open) | 162,617 | 1,777 | **1.093%** |
 | `moov2` (whitelisted) | 1,797,469 | 2,350 | **0.131%** |
 
-An **8.4x collapse**. Disputes did not stop being real — resolution authority
-concentrated into a small whitelisted set of proposers, and the public
-adversarial signal largely disappeared with it. Any rate quoted across the
-2025-09-05 break blends two different populations.
+An **8.4x collapse** — but that pooled figure is a blend across time, and the
+monthly series (measured 2026-08-25, after the consult brief was written) shows
+something worse and more decision-relevant:
+
+| Month | MOOv2 proposals | MOOv2 dispute rate | OOv2 dispute rate |
+|---|---:|---:|---:|
+| 2025-07 | 0 | — | 1.380% |
+| 2025-09 | 13,711 | 0.263% | 0.633% |
+| 2025-12 | 33,780 | 0.367% | 0.605% |
+| 2026-03 | 133,624 | 0.254% | 0.411% |
+| 2026-06 | 244,805 | 0.100% | 0.752% |
+| 2026-08 | 477,060 | **0.068%** | 0.263% |
+
+Three corrections to our own story:
+
+1. **The 2025-09-05 date is confirmed.** MOOv2 carries 11 proposals in August
+   2025 and 13,711 in September. (A secondary source dating the "major overhaul"
+   to November 2025 is probably describing when MOOv2 overtook OOv2 by volume —
+   27,378 vs 9,866 that month — not when it was enforced.)
+2. **It is not a step change to a new plateau — it is a continuing decline.**
+   MOOv2's dispute rate falls steadily from 0.263% to 0.068% over twelve months.
+   The pooled 0.131% averages a high-early period against a low-recent one.
+3. **Like-for-like, the collapse is nearer 20x than 8.4x.** Current-regime MOOv2
+   (0.068%) against pre-whitelist OOv2 (~1.38%). And OOv2 is now vestigial —
+   1,140 proposals in August 2026 against MOOv2's 477,060 — so essentially all
+   resolution flows through the low-dispute channel now.
+
+Meanwhile proposal volume grew **35x** (13,711 → 477,060/month). Polymarket got
+much bigger while the observable dispute rate fell by an order of magnitude.
+
+Disputes did not stop being real — resolution authority concentrated into a
+small whitelisted set of proposers, and the public adversarial signal
+disappeared with it.
 
 **Strategic reading (unverified, worth challenging):** risk moved from a public,
 observable process into a private, discretionary one. That could make a neutral

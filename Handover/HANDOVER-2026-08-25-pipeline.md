@@ -226,6 +226,52 @@ fixing the join could move it either way. Now the highest-value item in
 `TODO.md`; start from the OOv2 gap rather than assuming a corpus-wide
 derivation bug.
 
+## Late session: worker started, neg-risk join fixed, regime trend measured
+
+**Recurring worker is live under systemd**, not tmux — `/var/run/reboot-required`
+was already set, so an unattended-upgrades reboot would have killed a tmux
+worker silently, and this needs to run for weeks. `systemctl status prema-worker`;
+logs at `/var/log/prema-worker.log` (weekly logrotate). Compose services now
+carry `restart: unless-stopped` — they had **no** restart policy, so after that
+reboot the database would not have come back and the worker would have
+crash-looped against nothing. First run stored 172/200 CLOB snapshots; the 28
+misses are 404s on books that closed between the Gamma poll and the fetch, which
+is expected. **Correction to what I told the founder earlier: this worker costs
+no RPC credits** — both jobs hit Polymarket's public Gamma/CLOB APIs.
+
+**The 38% dispute-orphan rate is fixed — ADR-0024.** Not a derivation bug: the
+orphans' question ids *are* in `QuestionInitialized`, and a control proved
+`keccak256(ancillaryData)` reproduces CTF condition ids 500/500. The join rate
+splits by adapter — the three CTF adapters reach a market 95-98% of the time,
+both neg-risk adapters **0.0%** across 599,803 questions. Neg-risk adapters mint
+their own question ids, emit no conditionId, and prepare the CTF condition in a
+*different transaction* than the one initialising the question. The bridge was
+already in our database: Gamma's `negRiskRequestId` is exactly the on-chain
+neg-risk question id, **505,554/505,554**. Live result: orphans **1,561 → 235**,
+disputes with a market **2,566 → 3,892**.
+
+**Two process notes worth keeping.** The first derivation probe used `abi.encode`
+where CTF uses `abi.encodePacked` — a plausible hash matching nothing, caught
+only because the probe carried a control that was *supposed* to match. Always
+give an id-scheme probe a control. And I nearly started a full Polygon re-scan to
+index `ConditionPreparation` (about a day) when the answer was one query away in
+a column we already had — check what the venue API already gave us before
+reaching for the chain.
+
+**The regime break is worse than the brief says.** Monthly series measured
+2026-08-25: MOOv2's dispute rate is not a step down to a plateau but a
+**continuing decline** — 0.263% (Sep 2025) → 0.068% (Aug 2026) — while proposal
+volume grew **35x** (13,711 → 477,060/month). OOv2 is now vestigial (1,140
+proposals in Aug 2026). Like-for-like the collapse is nearer **20x** than the
+pooled 8.4x, because that pooled figure averages a high-early period against a
+low-recent one. The 2025-09-05 enforcement date is **confirmed** by our data (11
+MOOv2 proposals in Aug 2025, 13,711 in Sep). `docs/BRIEF-product-evolution.md`
+carries the table.
+
+This matters strategically: the phenomenon the company measures is shrinking on
+a *trend*, not a step, which is the top kill-risk in `WHERETOGO.md`. The monthly
+MOOv2 dispute rate is the early-warning metric to watch.
+
 ## Shipped
 
 Linter: `template-residue` (9.26% fire rate), `announcement-vs-report` (0.006%,
