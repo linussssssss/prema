@@ -8,9 +8,10 @@
  *     corpus-wide ~0.1% is true and describes almost nothing anyone trades.
  *  2. Per-rule lift overall — P(contested | fired) / P(contested | not fired).
  *  3. Per-rule lift inside the top volume decile, where the stakes are.
- *  3b. Stakes itself as the exposure, stratified the same way. Measured
- *     2026-08-25 this is 6.45x against `disputed` where the best text rule is
- *     1.57x — the headline finding, and the reason (4) matters more than (2).
+ *  3b. Stakes itself as the exposure, stratified the same way. It has run
+ *     several times the best text rule in every measurement so far — the
+ *     headline finding, and the reason (4) matters more than (2). The report
+ *     computes the comparison rather than quoting it.
  *  4. Per-rule lift against `disputed` alone.
  *
  * Two invariants this exists to respect:
@@ -147,7 +148,8 @@ const BASE = sql`
 
 /**
  * `contested` is overwhelmingly `resolved_na` (the exact share is computed and
- * printed, not assumed — it was ~99.7% pre-backfill and 95.5% after), and that label is
+ * printed, not assumed — it has moved from ~99.7% to the low 90s as the dispute
+ * set grew, which is why it is not written down here), and that label is
  * near-tautologically linked to some rules: `no-na-condition` detects text that
  * never mentions N/A, so the markets it flags mostly *cannot* resolve N/A. Lift
  * against `contested` therefore measures voidability, not dispute risk.
@@ -255,8 +257,8 @@ export async function analyzeSignal(db: Db): Promise<SignalReport | null> {
     maxVol: r.maxVol === null ? null : Number(r.maxVol),
   }));
 
-  // Stakes as an exposure, stratified the same way the rules are. Measured
-  // 2026-08-25 at 6.45x — about 4x anything the text rules produce.
+  // Stakes as an exposure, stratified the same way the rules are. It has come
+  // out several times any text rule in every run so far.
   const volumeStrata = rowsOf<StratumRow>(
     await db.execute(sql`
       ${BASE}
@@ -341,10 +343,22 @@ export function formatReport(r: SignalReport): string {
       "  is the comparison that says whether text or stakes is the real predictor.",
   );
   table([r.volumeLift]);
+  // Computed, never narrated. Three separate hardcoded figures in this report
+  // have already gone stale as the corpus changed (the resolved_na share, and
+  // both halves of this comparison). A number that describes the table above it
+  // has to come from the same data as the table.
+  const bestText = r.byRuleDisputed
+    .filter((x) => x.liftStratified !== null && x.fired > 0)
+    .sort((a, b) => (b.liftStratified ?? 0) - (a.liftStratified ?? 0))[0];
+  const stakes = r.volumeLift.liftStratified;
+  const ratio =
+    stakes !== null && bestText?.liftStratified ? (stakes / bestText.liftStratified).toFixed(1) : "?";
   out.push(
-    "  Measured 2026-08-25: 6.45x stratified vs 1.57x for the best text rule —\n" +
-      "  stakes is roughly 4x the predictor text is, and it survives stratification\n" +
-      "  across 532 category strata, so it is not composition.\n" +
+    `  ${stakes === null ? "n/a" : stakes.toFixed(2) + "x"} stratified vs ` +
+      `${bestText?.liftStratified?.toFixed(2) ?? "n/a"}x for the best text rule ` +
+      `(\`${bestText?.rule ?? "n/a"}\`) —\n` +
+      `  stakes is roughly ${ratio}x the predictor text is, and it survives\n` +
+      `  stratification across ${r.volumeLift.strata} category strata, so it is not composition.\n` +
       "  **But `volume_usd` is FINAL volume, which is not known at listing time.**\n" +
       "  As a listing-time feature it is hindsight and violates ADR-0009. It is\n" +
       "  legitimate only as a running feature — volume-to-date on a live market —\n" +
