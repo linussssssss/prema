@@ -87,6 +87,19 @@ describe("computeLabels (PGlite end-to-end)", () => {
         questionId: "0xq2",
         args: { timestamp: "1717243200", price: "0" },
       },
+      // A settle for an undisputed question that shares m2's request timestamp.
+      // Settles are fetched by questionId now (ADR-0022), so this one must
+      // neither be picked up for m2 nor create a dispute row of its own.
+      {
+        ...evBase,
+        contractAddress: "0xoo",
+        oracle: "oov2",
+        eventName: "Settle",
+        txHash: "0xt2b",
+        logIndex: 3,
+        questionId: "0xqUnrelated",
+        args: { timestamp: "1717243200", price: "1000000000000000000" },
+      },
       // m3: resolved 50/50 on-chain
       {
         ...evBase,

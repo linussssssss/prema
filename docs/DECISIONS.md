@@ -543,3 +543,58 @@ hindsight-free (ADR-0009) must join `linter_hits` to
 `rules_versions WHERE version_num = 1` instead. The two diverge precisely on
 rules-edited markets, in the direction that flatters us — caught by the website
 session before it reached a page.
+
+---
+
+## ADR-0022 — Fetch what the join needs, not the table it lives in
+
+**Status:** accepted · 2026-08-25
+
+`dataset:build` died with `Exit status 134` (SIGABRT, "JavaScript heap out of
+memory") after the backfill completed. Not disk — 27 GB free — and not the
+linter, which had finished cleanly at 5,670,580 hits. It died in `computeLabels`.
+
+The cause was a query written when the events table held 56,833 rows. It now
+holds 9.5M:
+
+```
+Settle              1,958,963 rows    5,063 MB of args
+QuestionResolved    1,948,815 rows      281 MB
+ConditionResolution 1,454,737 rows      413 MB
+DisputePrice            4,127 rows       10 MB
+```
+
+`Settle` carries the full `ancillaryData` blob, so 5 GB of it was being loaded
+into a `Map` on a 4 GB box — to serve lookups for 4,127 disputes. ADR-0019
+streamed the *market* side of this function for exactly this reason and left the
+event side alone, because at the time the event side was three orders of
+magnitude smaller. The backfill changed that by 167x and the query did not move.
+
+**The rule this encodes: bound a query by the join it feeds, not by the table it
+reads.** Four loads were rewritten to that shape:
+
+- **Settles** are fetched by the disputed `questionId`s. The request key is
+  `sha256(questionId|timestamp)`, so only a settle sharing a dispute's
+  questionId can share its key — the rest were never reachable. 1,958,963 rows
+  becomes 7,095, a 276x cut, and it is a *superset* of what can match, so the
+  narrowing cannot change a label.
+- **DVM times** are reduced to distinct epoch seconds in SQL. The old code
+  pulled all ~2M `votes` rows to build a `Set` of times, and selected
+  `ancillaryHash` alongside without ever reading it.
+- **Payout vectors** are prefiltered in SQL to uniform arrays — a superset of
+  the 50/50 ones, ~86k of 3.4M. `isFiftyFifty` still makes the final call, so
+  the SQL predicate can only ever be too generous, never too strict. This keeps
+  one authority for the definition instead of two that can drift.
+- **The corpus-wide `byQuestionId`/`byConditionId` maps are gone.** 2.6M entries
+  each, built by streaming every market, to answer a few thousand lookups. Ids
+  are now resolved on demand in batches, ordered by market id so the same market
+  wins a duplicate id as before.
+
+Verified against the live corpus before writing the code rather than assumed:
+every `DisputePrice` and `Settle` carries a questionId and timestamp (so the
+null-key path is unreachable here, though it is still handled), and the payout
+vectors are exactly three shapes — `["0","1"]`, `["1","0"]`, `["1","1"]` — with
+the 86,234 `["1","1"]` rows being the whole of on-chain `resolved_na`.
+
+A test pins the narrowing: a settle for an undisputed question sharing a
+dispute's timestamp must neither attach to that dispute nor create a row.

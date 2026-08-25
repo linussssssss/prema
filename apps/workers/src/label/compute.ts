@@ -1,4 +1,4 @@
-import { and, asc, eq, gt, inArray, sql } from "drizzle-orm";
+import { and, asc, eq, gt, inArray, isNotNull, isNull, sql } from "drizzle-orm";
 import {
   ambiguityLabels,
   appendAudit,
@@ -17,6 +17,61 @@ import { logger } from "../lib/log.ts";
 const ACTOR = "label";
 /** Markets per round trip. See ADR-0019 — the corpus does not fit in memory. */
 const MARKET_BATCH = 20_000;
+/** Ids per round trip when resolving event ids back to markets (ADR-0022). */
+const LOOKUP_BATCH = 1_000;
+
+/** The projection every event-shaped query in here uses. */
+const EVENT_COLUMNS = {
+  eventName: resolutionEvents.eventName,
+  oracle: resolutionEvents.oracle,
+  questionId: resolutionEvents.questionId,
+  conditionId: resolutionEvents.conditionId,
+  blockTime: resolutionEvents.blockTime,
+  args: resolutionEvents.args,
+} as const;
+
+function isNonNull<T>(v: T | null | undefined): v is T {
+  return v !== null && v !== undefined;
+}
+
+/**
+ * Resolve the handful of on-chain ids that actually matter back to market ids.
+ *
+ * Replaces the corpus-wide questionId/conditionId maps this used to build: at
+ * 2.6M markets those cost hundreds of MB to answer a few thousand lookups
+ * (ADR-0022). Ordered by market id so that when two markets share an id, the
+ * same one wins as when the maps were built by streaming the corpus in order.
+ */
+async function resolveMarketIds(
+  db: Db,
+  questionIds: readonly (string | null)[],
+  conditionIds: readonly (string | null)[],
+): Promise<{ byQuestionId: Map<string, string>; byConditionId: Map<string, string> }> {
+  const byQuestionId = new Map<string, string>();
+  const byConditionId = new Map<string, string>();
+
+  const qids = [...new Set(questionIds.filter(isNonNull))];
+  for (let i = 0; i < qids.length; i += LOOKUP_BATCH) {
+    const rows = await db
+      .select({ id: markets.id, questionId: markets.questionId })
+      .from(markets)
+      .where(inArray(markets.questionId, qids.slice(i, i + LOOKUP_BATCH)))
+      .orderBy(asc(markets.id));
+    for (const m of rows) if (m.questionId) byQuestionId.set(m.questionId, m.id);
+  }
+
+  const cids = [...new Set(conditionIds.filter(isNonNull))];
+  for (let i = 0; i < cids.length; i += LOOKUP_BATCH) {
+    const rows = await db
+      .select({ id: markets.id, conditionId: markets.conditionId })
+      .from(markets)
+      .where(inArray(markets.conditionId, cids.slice(i, i + LOOKUP_BATCH)))
+      .orderBy(asc(markets.id));
+    for (const m of rows) if (m.conditionId) byConditionId.set(m.conditionId, m.id);
+  }
+
+  return { byQuestionId, byConditionId };
+}
 
 export interface LabelStats {
   marketsLabeled: number;
@@ -59,13 +114,11 @@ export async function computeLabels(db: Db): Promise<LabelStats> {
     contestedMarkets: 0,
   };
 
-  // --- Lookup maps from venue data -----------------------------------------
-  // Streamed rather than loaded whole: the corpus is ~2.6M markets, and holding
-  // the rows *and* the derived maps at once needs multiple GB (ADR-0019). The
-  // venue-side resolved_na check is folded into the same pass so the rows never
-  // have to be retained.
-  const byQuestionId = new Map<string, string>();
-  const byConditionId = new Map<string, string>();
+  // --- Venue-side resolved_na ----------------------------------------------
+  // Streamed rather than loaded whole: the corpus is ~2.6M markets (ADR-0019).
+  // This pass deliberately does NOT build questionId/conditionId maps for the
+  // whole corpus any more — see ADR-0022. Only a few thousand event rows ever
+  // need resolving back to a market, so those ids are looked up on demand.
   const venueNaMarketIds = new Set<string>();
   {
     let cursor = "";
@@ -73,20 +126,16 @@ export async function computeLabels(db: Db): Promise<LabelStats> {
       const rows = await db
         .select({
           id: markets.id,
-          questionId: markets.questionId,
-          conditionId: markets.conditionId,
           closed: markets.closed,
           outcomePrices: markets.outcomePrices,
         })
         .from(markets)
-        .where(gt(markets.id,cursor))
+        .where(gt(markets.id, cursor))
         .orderBy(asc(markets.id))
         .limit(MARKET_BATCH);
       if (rows.length === 0) break;
       cursor = rows[rows.length - 1]!.id;
       for (const m of rows) {
-        if (m.questionId) byQuestionId.set(m.questionId, m.id);
-        if (m.conditionId) byConditionId.set(m.conditionId, m.id);
         // Venue-side fallback: closed markets whose final prices are exactly 0.5/0.5.
         if (m.closed && Array.isArray(m.outcomePrices) && m.outcomePrices.length === 2) {
           const [a, b] = m.outcomePrices as number[];
@@ -99,56 +148,81 @@ export async function computeLabels(db: Db): Promise<LabelStats> {
 
   // --- Disputes from DisputePrice events -----------------------------------
   const disputeEvents = (await db
-    .select({
-      eventName: resolutionEvents.eventName,
-      oracle: resolutionEvents.oracle,
-      questionId: resolutionEvents.questionId,
-      conditionId: resolutionEvents.conditionId,
-      blockTime: resolutionEvents.blockTime,
-      args: resolutionEvents.args,
-    })
+    .select(EVENT_COLUMNS)
     .from(resolutionEvents)
-    .where(inArray(resolutionEvents.eventName, ["DisputePrice", "Settle"]))) as EventRow[];
+    .where(eq(resolutionEvents.eventName, "DisputePrice"))) as EventRow[];
 
   const requestKeyOf = (e: EventRow): string =>
     sha256Hex(`${e.questionId ?? "?"}|${String(e.args.timestamp ?? "?")}`);
 
   const disputeByKey = new Map<string, EventRow>();
+  for (const e of disputeEvents) disputeByKey.set(requestKeyOf(e), e);
+
+  // Settles are fetched by questionId rather than wholesale. There are ~2M of
+  // them carrying full ancillaryData (~5 GB of `args`) against ~4k disputes,
+  // and the request key starts with the questionId — so only a settle sharing
+  // a dispute's questionId can ever share its key. Loading them all is what
+  // put the build into an OOM abort (ADR-0022).
   const settleByKey = new Map<string, EventRow>();
-  for (const e of disputeEvents) {
-    if (e.eventName === "DisputePrice") disputeByKey.set(requestKeyOf(e), e);
-    else settleByKey.set(requestKeyOf(e), e);
+  {
+    const disputedQids = [...new Set(disputeEvents.map((e) => e.questionId).filter(isNonNull))];
+    for (let i = 0; i < disputedQids.length; i += LOOKUP_BATCH) {
+      const rows = (await db
+        .select(EVENT_COLUMNS)
+        .from(resolutionEvents)
+        .where(
+          and(
+            eq(resolutionEvents.eventName, "Settle"),
+            inArray(resolutionEvents.questionId, disputedQids.slice(i, i + LOOKUP_BATCH)),
+          ),
+        )) as EventRow[];
+      for (const e of rows) settleByKey.set(requestKeyOf(e), e);
+    }
+    // A dispute with no questionId keys on the literal "?", so the only settles
+    // that can match it are those that also lack one.
+    if (disputeEvents.some((e) => !e.questionId)) {
+      const rows = (await db
+        .select(EVENT_COLUMNS)
+        .from(resolutionEvents)
+        .where(and(eq(resolutionEvents.eventName, "Settle"), isNull(resolutionEvents.questionId)))) as EventRow[];
+      for (const e of rows) settleByKey.set(requestKeyOf(e), e);
+    }
   }
 
   // --- Escalation: DVM activity joined by request time + ancillary prefix ---
-  const dvmResolved = (await db
-    .select({
-      eventName: resolutionEvents.eventName,
-      oracle: resolutionEvents.oracle,
-      questionId: resolutionEvents.questionId,
-      conditionId: resolutionEvents.conditionId,
-      blockTime: resolutionEvents.blockTime,
-      args: resolutionEvents.args,
-    })
-    .from(resolutionEvents)
-    .where(eq(resolutionEvents.oracle, "votingv2"))) as EventRow[];
-  const voteRows = await db
-    .select({ requestTime: votes.requestTime, ancillaryHash: votes.ancillaryHash })
-    .from(votes);
-
+  // Both sides are reduced to distinct epoch seconds in the database: the votes
+  // table alone is ~2M rows, and all this needs from it is the set of times.
   const dvmTimes = new Set<number>();
-  for (const e of dvmResolved) {
-    const t = Number(e.args.time ?? NaN);
-    if (Number.isFinite(t)) dvmTimes.add(t);
-  }
-  for (const v of voteRows) {
-    if (v.requestTime) dvmTimes.add(Math.floor(v.requestTime.getTime() / 1000));
+  {
+    const dvmResolved = (await db
+      .select(EVENT_COLUMNS)
+      .from(resolutionEvents)
+      .where(eq(resolutionEvents.oracle, "votingv2"))) as EventRow[];
+    for (const e of dvmResolved) {
+      const t = Number(e.args.time ?? NaN);
+      if (Number.isFinite(t)) dvmTimes.add(t);
+    }
+    const voteTimes = await db
+      .selectDistinct({
+        epoch: sql<string>`floor(extract(epoch from ${votes.requestTime}))::bigint`,
+      })
+      .from(votes)
+      .where(isNotNull(votes.requestTime));
+    for (const v of voteTimes) {
+      const t = Number(v.epoch);
+      if (Number.isFinite(t)) dvmTimes.add(t);
+    }
   }
 
   const disputedMarketIds = new Set<string>();
   const escalatedMarketIds = new Set<string>();
+  const { byQuestionId: disputeMarketByQid } = await resolveMarketIds(
+    db,
+    disputeEvents.map((e) => e.questionId),
+    [],
+  );
   for (const [key, e] of disputeByKey) {
-    const marketId = e.questionId ? (byQuestionId.get(e.questionId) ?? null) : null;
+    const marketId = e.questionId ? (disputeMarketByQid.get(e.questionId) ?? null) : null;
     if (marketId) disputedMarketIds.add(marketId);
     const settle = settleByKey.get(key);
     const requestTime = Number(e.args.timestamp ?? NaN);
@@ -190,26 +264,33 @@ export async function computeLabels(db: Db): Promise<LabelStats> {
   }
 
   // --- resolved_na from on-chain payout vectors ----------------------------
+  // Prefiltered in SQL to rows whose payout vector is a uniform array, which is
+  // a superset of the 50/50 ones (~86k of ~3.4M). `isFiftyFifty` still makes
+  // the final call, so the predicate here can only ever be too generous.
   const naMarketIds = new Set<string>();
+  const payoutJson = sql`coalesce(${resolutionEvents.args}->'payoutNumerators', ${resolutionEvents.args}->'payouts')`;
   const resolutionRows = (await db
-    .select({
-      eventName: resolutionEvents.eventName,
-      oracle: resolutionEvents.oracle,
-      questionId: resolutionEvents.questionId,
-      conditionId: resolutionEvents.conditionId,
-      blockTime: resolutionEvents.blockTime,
-      args: resolutionEvents.args,
-    })
+    .select(EVENT_COLUMNS)
     .from(resolutionEvents)
     .where(
-      inArray(resolutionEvents.eventName, ["ConditionResolution", "QuestionResolved", "QuestionManuallyResolved"]),
+      and(
+        inArray(resolutionEvents.eventName, ["ConditionResolution", "QuestionResolved", "QuestionManuallyResolved"]),
+        sql`jsonb_typeof(${payoutJson}) = 'array'`,
+        sql`jsonb_array_length(${payoutJson}) >= 2`,
+        sql`(select count(distinct e.value) from jsonb_array_elements_text(${payoutJson}) e) = 1`,
+      ),
     )) as EventRow[];
+  const naLookup = await resolveMarketIds(
+    db,
+    resolutionRows.map((e) => e.questionId),
+    resolutionRows.map((e) => e.conditionId),
+  );
   for (const e of resolutionRows) {
     const payouts = (e.args.payoutNumerators ?? e.args.payouts) as unknown;
     if (!isFiftyFifty(payouts)) continue;
     const marketId =
-      (e.conditionId && byConditionId.get(e.conditionId)) ||
-      (e.questionId && byQuestionId.get(e.questionId)) ||
+      (e.conditionId && naLookup.byConditionId.get(e.conditionId)) ||
+      (e.questionId && naLookup.byQuestionId.get(e.questionId)) ||
       null;
     if (marketId) naMarketIds.add(marketId);
   }
