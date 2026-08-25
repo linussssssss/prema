@@ -691,3 +691,70 @@ Also: the first derivation probe used `abi.encode` where CTF's `getConditionId`
 uses `abi.encodePacked`, which produced a plausible hash matching nothing. It was
 caught only because the probe carried a control that was *supposed* to match.
 Probes into unfamiliar id schemes should always carry one.
+
+---
+
+## ADR-0025 — Rules do change after listing, and it concentrates where judgement lives
+
+**Status:** accepted · 2026-08-25
+
+`rules_edited_after_listing` has been 0 for the entire project, and I twice
+described it as time-gated on the recurring worker. **That was wrong.** Every
+market has exactly one Gamma rules version because the ingest captured each
+market once, so post-listing edits are invisible in Gamma data no matter how
+long anything runs. It was a data limitation reading like a finding.
+
+The chain carries an independent second snapshot: all 2,166,514
+`QuestionInitialized` events hold the ancillary data the adapter committed at
+listing — 100% populated, ~1,489 chars each, immutable and timestamped.
+Comparing it against Gamma's current text answers the question retroactively.
+
+**Result over 2,017,202 markets:**
+
+| | count | share |
+|---|---:|---:|
+| identical | 1,984,941 | 98.401% |
+| **drifted** | **32,258** | **1.599%** |
+| unparsed | 3 | 0.000% |
+
+Only 3 rows failed to parse, so the envelope handling is not hiding anything.
+
+**The rate is not uniform — it concentrates ~10-16x in judgement-heavy
+categories**, against a 1.6% baseline:
+
+| Category | Drift rate |
+|---|---:|
+| Business | 26.3% |
+| Awards | 15.8% |
+| Politics | 15.1% |
+| NBA | 13.2% |
+| Music | 12.4% |
+| Movies | 9.2% |
+
+Sports and crypto — the mechanically-resolved bulk of the corpus — barely move.
+Editing clusters exactly where resolution requires discretion, which is where
+disputes and litigation live.
+
+**Magnitude:** 62% of edits change length by <2%, 20% by 2-10%, 11% by 10-50%,
+and 100 markets were rewritten by >50%. A further 1,878 changed text at
+identical length — a substitution, not an addition. Note `normalizeRulesText`
+already removes whitespace-only differences (ADR-0006), so every one of these
+is a real character change, not formatting churn.
+
+**What this does NOT establish**, and must not be claimed:
+
+- **Not that the edit was material or adverse.** A typo fix counts as drift.
+- **Not when the edit happened** — this compares listing-time text against
+  *current* text, so it cannot yet say whether an edit landed before trading,
+  during, or after resolution. That timing is what makes an edit a
+  retroactive rule change, and it is the next thing to build.
+- **Not that drift predicts anything.** Whether it correlates with disputes or
+  voids is unmeasured; it needs the same stratified treatment as everything else
+  (ADR-0020), because "Politics drifts and Politics disputes" would reproduce
+  the exact confound that cost us the 20x figure.
+
+**Why it matters anyway:** we hold both versions for 32,258 markets, hash-chained
+and hindsight-free. Whatever the predictive value turns out to be, the record of
+*which markets had their rules changed after people traded on them* is the
+artifact the 2026 Polymarket litigation is about, and nobody else has assembled
+it.
