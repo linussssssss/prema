@@ -130,6 +130,46 @@ describe("analyzeSignal", () => {
     expect(r.byDecile.find((d) => d.decile === 10)!.contested).toBe(0);
   });
 
+  it("gives unknown volume a null decile rather than folding it into decile 1", async () => {
+    // Regression: `ntile(10) ... nulls first` swept all 803,398 volume-less
+    // markets (30.7% of the corpus) into deciles 1-3, which printed as "low
+    // stakes are contested more" when the real story was missing data.
+    const h2 = await createDb("pglite://memory");
+    await h2.migrate();
+    await h2.db.insert(venues).values({ id: "polymarket", name: "Polymarket", kind: "onchain" });
+    for (let i = 1; i <= 20; i++) {
+      await h2.db.insert(markets).values({
+        id: `polymarket:${i}`,
+        venueId: "polymarket",
+        externalId: String(i),
+        question: `q${i}`,
+        // Half the corpus has no volume at all.
+        volumeUsd: i <= 10 ? null : String(i * 1000),
+        closed: true,
+        capturedAt: new Date(),
+      });
+      await h2.db.insert(ambiguityLabels).values({
+        marketId: `polymarket:${i}`,
+        disputed: false,
+        escalated: false,
+        resolvedNa: false,
+        rulesEditedAfterListing: false,
+        contested: false,
+        labelVersion: "test",
+        computedAt: new Date(),
+      });
+    }
+    const r = (await analyzeSignal(h2.db))!;
+    const unknown = r.byDecile.find((d) => d.decile === null);
+    expect(unknown?.n).toBe(10);
+    // The ten markets that DO have volume fill all ten deciles between them.
+    const known = r.byDecile.filter((d) => d.decile !== null);
+    expect(known).toHaveLength(10);
+    expect(known.reduce((a, d) => a + d.n, 0)).toBe(10);
+    expect(known.every((d) => d.decile !== null && d.decile >= 1 && d.decile <= 10)).toBe(true);
+    await h2.close?.();
+  });
+
   it("separates composition from signal (Simpson's paradox)", async () => {
     // A rule with NO within-category effect, made to look strong by composition
     // alone — the exact failure that made status-verb-gap read 20.66x pooled

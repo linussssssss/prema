@@ -598,3 +598,40 @@ the 86,234 `["1","1"]` rows being the whole of on-chain `resolved_na`.
 
 A test pins the narrowing: a settle for an undisputed question sharing a
 dispute's timestamp must neither attach to that dispute nor create a row.
+
+---
+
+## ADR-0023 — Stakes beat text, and unknown volume is not low volume
+
+**Status:** accepted · 2026-08-25
+
+Two findings from stratifying the volume gradient, which had never been tested
+the way the rules were.
+
+**1. The decile table was wrong.** `BASE` built deciles with
+`ntile(10) over (order by volume_usd nulls first)`. 803,398 markets — **30.7% of
+the corpus** — have no volume at all, so that swept them whole into deciles 1-3.
+The printed table therefore read "contested falls from 4.13% at low stakes to
+0.73% at high stakes", a clean-looking gradient that was mostly an artifact of
+missing data. Volume-less markets get a **null decile** now, never decile 1;
+`exporters.ts` already followed this rule and this file did not. Pinned by test.
+
+**2. Stakes is roughly 4x the predictor text is.** On markets with known
+volume, `disputed` climbs monotonically **0.029% (d1) → 0.524% (d10)**, and the
+Mantel-Haenszel estimate for top-decile vs deciles 1-9, stratified by category,
+is **6.52x** (pooled 9.36x) across 521 strata. It holds *inside* every large
+category independently — Sports 0.034→0.271%, Crypto 0→0.606%, Bitcoin
+0.003→0.231% — so unlike the 20x rule lift of ADR-0020, this one is not
+composition. The best text rule is 1.57x.
+
+**The constraint that decides how this can be used:** `volume_usd` is *final*
+volume. It is not known at listing time, so ranking listings by it is hindsight
+and violates the ADR-0009 invariant. The 6.52x is a valid *descriptive* fact
+about where disputes concentrate, and a valid *running* feature — volume-to-date
+on a live market is knowable at every moment — but it is not a pre-listing
+score. Concretely: it supports a watchlist that re-ranks live markets, not a
+"score this market when it lists" product. `analyze:signal` prints this caveat
+next to the number so it cannot be quoted bare.
+
+This does not rescue the text thesis; it relocates the product. See the
+handover for what it implies commercially.

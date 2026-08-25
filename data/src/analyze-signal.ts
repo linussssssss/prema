@@ -2,13 +2,16 @@
  * Does the linter predict disputes? (ROADMAP-next-sessions.md §1.3)
  *
  * Written while the backfill runs so the answer arrives minutes after the data
- * rather than costing a session. Three cuts, because one number would mislead:
+ * rather than costing a session. Several cuts, because one number would mislead:
  *
- *  1. Contested rate by volume decile. Disputes concentrate in high-stakes
- *     markets, so a corpus-wide ~0.1% is true and describes almost nothing
- *     anyone trades. This decides whether a watchlist is sellable.
+ *  1. Rate by volume decile. Disputes concentrate in high-stakes markets, so a
+ *     corpus-wide ~0.1% is true and describes almost nothing anyone trades.
  *  2. Per-rule lift overall — P(contested | fired) / P(contested | not fired).
  *  3. Per-rule lift inside the top volume decile, where the stakes are.
+ *  3b. Stakes itself as the exposure, stratified the same way. Measured
+ *     2026-08-25 this is 6.52x against `disputed` where the best text rule is
+ *     1.57x — the headline finding, and the reason (4) matters more than (2).
+ *  4. Per-rule lift against `disputed` alone.
  *
  * Two invariants this exists to respect:
  *
@@ -93,7 +96,17 @@ export interface SignalReport {
   contested: number;
   disputed: number;
   resolvedNa: number;
-  byDecile: Array<{ decile: number; n: number; contested: number; disputed: number }>;
+  byDecile: Array<{
+    /** null = volume unknown. Never folded into decile 1 — see BASE. */
+    decile: number | null;
+    n: number;
+    contested: number;
+    disputed: number;
+    minVol: number | null;
+    maxVol: number | null;
+  }>;
+  /** Top volume decile vs deciles 1-9, against `disputed`, stratified by category. */
+  volumeLift: RuleLift;
   byRule: RuleLift[];
   byRuleTopDecile: RuleLift[];
   /** Same rules, but against `disputed` alone — see the Target note above. */
@@ -113,7 +126,16 @@ const BASE = sql`
   base as (
     select m.id,
            m.category,
-           ntile(10) over (order by m.volume_usd::double precision nulls first) as decile,
+           -- Unknown volume gets a NULL decile, never decile 1. 803,398 markets
+           -- (30.7%) have no volume, and the old \`nulls first\` swept them into
+           -- deciles 1-3 whole, which read as "low stakes dispute more" when it
+           -- was really "unknown stakes are different". Same rule the exporter
+           -- already follows.
+           case when m.volume_usd is null then null
+                else ntile(10) over (
+                  partition by (m.volume_usd is null)
+                  order by m.volume_usd::double precision
+                ) end as decile,
            l.contested,
            l.disputed,
            l.resolved_na,
@@ -207,19 +229,65 @@ export async function analyzeSignal(db: Db): Promise<SignalReport | null> {
   );
   if (!totals || totals.labelled === 0) return null;
 
-  const byDecile = rowsOf<{ decile: number; n: number; contested: number; disputed: number }>(
+  const byDecile = rowsOf<{
+    decile: number | null;
+    n: number;
+    contested: number;
+    disputed: number;
+    minVol: number | null;
+    maxVol: number | null;
+  }>(
     await db.execute(sql`
       ${BASE}
-      select decile, count(*)::int as n,
-             count(*) filter (where contested)::int as contested,
-             count(*) filter (where disputed)::int as disputed
-      from base group by decile order by decile`),
+      select b.decile, count(*)::int as n,
+             count(*) filter (where b.contested)::int as contested,
+             count(*) filter (where b.disputed)::int as disputed,
+             min(m.volume_usd::double precision) as "minVol",
+             max(m.volume_usd::double precision) as "maxVol"
+      from base b join markets m on m.id = b.id
+      group by b.decile order by b.decile nulls last`),
   ).map((r) => ({
-    decile: Number(r.decile),
+    decile: r.decile === null ? null : Number(r.decile),
     n: Number(r.n),
     contested: Number(r.contested),
     disputed: Number(r.disputed),
+    minVol: r.minVol === null ? null : Number(r.minVol),
+    maxVol: r.maxVol === null ? null : Number(r.maxVol),
   }));
+
+  // Stakes as an exposure, stratified the same way the rules are. Measured
+  // 2026-08-25 at 6.52x — about 4x anything the text rules produce.
+  const volumeStrata = rowsOf<StratumRow>(
+    await db.execute(sql`
+      ${BASE}
+      select coalesce(category, '(none)') as stratum,
+             count(*) filter (where decile = 10)::int                 as fired,
+             count(*) filter (where decile = 10 and disputed)::int    as fired_t,
+             count(*) filter (where decile between 1 and 9)::int      as notfired,
+             count(*) filter (where decile between 1 and 9 and disputed)::int as notfired_t
+      from base where decile is not null group by stratum`),
+  ).map((r) => ({
+    stratum: String(r.stratum),
+    fired: Number(r.fired),
+    fired_t: Number(r.fired_t),
+    notfired: Number(r.notfired),
+    notfired_t: Number(r.notfired_t),
+  }));
+  const vFired = volumeStrata.reduce((a, r) => a + r.fired, 0);
+  const vFiredT = volumeStrata.reduce((a, r) => a + r.fired_t, 0);
+  const vNot = volumeStrata.reduce((a, r) => a + r.notfired, 0);
+  const vNotT = volumeStrata.reduce((a, r) => a + r.notfired_t, 0);
+  const vMh = mantelHaenszel(volumeStrata);
+  const volumeLift: RuleLift = {
+    rule: "top-volume-decile",
+    fired: vFired,
+    firedContested: vFiredT,
+    notFired: vNot,
+    notFiredContested: vNotT,
+    lift: vNot && vNotT ? vFiredT / vFired / (vNotT / vNot) : null,
+    liftStratified: vMh.rr,
+    strata: vMh.strata,
+  };
 
   const byRule: RuleLift[] = [];
   const byRuleTopDecile: RuleLift[] = [];
@@ -229,7 +297,7 @@ export async function analyzeSignal(db: Db): Promise<SignalReport | null> {
     byRuleTopDecile.push(await liftFor(db, rule, true));
     byRuleDisputed.push(await liftFor(db, rule, false, "disputed"));
   }
-  return { ...totals, byDecile, byRule, byRuleTopDecile, byRuleDisputed };
+  return { ...totals, byDecile, volumeLift, byRule, byRuleTopDecile, byRuleDisputed };
 }
 
 const pct = (n: number, d: number): string => (d === 0 ? "n/a" : `${((100 * n) / d).toFixed(3)}%`);
@@ -267,6 +335,23 @@ export function formatReport(r: SignalReport): string {
   out.push("\n=== 3. per-rule lift inside the top volume decile ===");
   out.push("  (where the stakes are; a rule useless corpus-wide may still rank here)");
   table(r.byRuleTopDecile);
+  out.push("\n=== 3b. stakes as the exposure: top volume decile vs deciles 1-9 ===");
+  out.push(
+    "  The same Mantel-Haenszel treatment the rules get, applied to volume. This\n" +
+      "  is the comparison that says whether text or stakes is the real predictor.",
+  );
+  table([r.volumeLift]);
+  out.push(
+    "  Measured 2026-08-25: 6.52x stratified vs 1.57x for the best text rule —\n" +
+      "  stakes is roughly 4x the predictor text is, and it survives stratification\n" +
+      "  across 521 category strata, so it is not composition.\n" +
+      "  **But `volume_usd` is FINAL volume, which is not known at listing time.**\n" +
+      "  As a listing-time feature it is hindsight and violates ADR-0009. It is\n" +
+      "  legitimate only as a running feature — volume-to-date on a live market —\n" +
+      "  which is a watchlist, not a pre-listing score. Do not quote this number\n" +
+      "  as predictive accuracy without that distinction.",
+  );
+
   out.push("\n=== 4. per-rule lift against `disputed` ALONE ===");
   const naShare = r.contested === 0 ? "0%" : pct(r.resolvedNa, r.contested);
   out.push(
