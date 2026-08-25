@@ -194,11 +194,19 @@ timestamp join is the right mechanism at all — in UMA OOv2 a disputed request
 normally *does* reach the DVM, so 6/4,127 suggests either MOOv2 resolves
 disputes off the DVM path or the join is wrong.
 
-**38% of disputes never reach a market.** 1,561 of 4,127 dispute events have a
-questionId matching no market (62.2% join rate; `QuestionInitialized` is 69.8%).
-`validate` already flags this as a P0 — it is the single highest-value fix left,
-because it would take `disputed` from 2,089 markets to ~3,400 and firm up every
-estimate in §4.
+**38% of disputes never reach a market, and not at random.** 1,561 of 4,127
+dispute events have a questionId matching no market (62.2%;
+`QuestionInitialized` is 69.8%). The loss clusters by oracle — `moov2` matches
+**77.9%**, `oov2` only **41.4%** — while by year it is nearly flat (58.6 / 57.6
+/ 65.2), so it is an oracle effect, not an era one.
+
+That matters for the number above: the 2,089 disputed markets over-represent the
+MOOv2 regime along exactly the dimension known to shift the dispute rate 8.4x,
+so §4's 1.57x rests on a non-random subsample. It does not overturn the 1.4–1.6x
+consensus — three methods agree — but the figure should carry the caveat, and
+fixing the join could move it either way. Now the highest-value item in
+`TODO.md`; start from the OOv2 gap rather than assuming a corpus-wide
+derivation bug.
 
 ## Shipped
 

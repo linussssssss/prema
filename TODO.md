@@ -51,10 +51,32 @@ ADRs as you go; `pnpm lint && pnpm typecheck && pnpm test` before "done".
       2026 disputes (UMA discourse / oracle.uma.xyz list them), confirm each
       is `disputed` in the dataset, and that at least one escalated one has
       `escalated=true`. Document the check in REPORT or a notebook.
-- [ ] **Sanity-check the questionId join rate**: fraction of DisputePrice
-      events whose derived questionId matches a `markets.question_id`. Should
-      be near 100% for post-2024 markets; if low, compare derived ids against
-      `QuestionInitialized` questionIDs (both stored in `resolution_events`).
+- [x] **Sanity-check the questionId join rate — MEASURED 2026-08-25, and it is
+      low.** 2,566 of 4,127 `DisputePrice` events match a `markets.question_id`
+      (**62.2%**); `QuestionInitialized` is 69.8%. `validate` prints both.
+- [ ] **P0 — fix the 38% of disputes that never reach a market.** This is now
+      the single highest-value item left. 1,561 dispute events are orphaned, so
+      `disputed` covers 2,089 markets instead of ~3,400. Every estimate in
+      `analyze:signal` §4 is computed on that reduced set.
+
+      **The loss is not random — measured 2026-08-25.** It clusters hard by
+      oracle: `moov2` disputes match a market **77.9%** of the time, `oov2` only
+      **41.4%**. By year it is nearly flat (58.6% / 57.6% / 65.2%), so this is
+      an oracle effect, not an era effect — the year trend is just the mix
+      shifting toward `moov2`.
+
+      **Consequence for the headline number:** the 2,089 disputed markets
+      over-represent the MOOv2 regime relative to true dispute counts, so the
+      1.57x in §4 is conditioned on a subsample that is non-random along exactly
+      the dimension (oracle regime) known to shift the dispute rate 8.4x. That
+      does not overturn the 1.4–1.6x consensus, but the §4 figure should carry
+      this caveat until the join is fixed, and it could move in either
+      direction.
+
+      Start from the `oov2` gap: compare derived ids against
+      `QuestionInitialized` questionIDs (both are in `resolution_events`) on
+      OOv2-era disputes specifically, rather than assuming a corpus-wide
+      derivation bug.
 
 ## P0 — resolve the MOOv2 question — ANSWERED 2026-08-23 (ADR-0014)
 
@@ -230,6 +252,23 @@ raises and the product changes shape. Everything in P1/P2 is downstream of it.
       carry signal" but it understates a product combining text with stakes —
       and stakes is the stronger known predictor. Re-run unmatched, and
       conditioned on `volume_decile`, once labels land.
+- [x] **Re-run at full scale — ANSWERED 2026-08-25, and the answer is no.**
+      The gating question was whether `vague-source`'s 2.02x stratified lift
+      survived ~21x more positives. It came in at **1.57x** against `disputed`
+      (1.61x in the top volume decile). Directionally positive, materially
+      weaker, and now the third independent method to land in 1.4–1.6x
+      alongside the blind study's 1.46x. **Treat 1.4–1.6x as the measured
+      effect size and stop re-deriving it.**
+
+      Two rules of seven carry nothing: `occurrence-vs-reporting` (1,974 fires,
+      zero disputes) and `outcomes-not-exhaustive` (structurally unreachable).
+      `hedge-words` fires on 57% of the corpus, so its 1.27x cannot rank a
+      watchlist regardless of sign.
+
+      The decile table confirms ADR-0020 at full scale: `contested` falls with
+      volume (4.13% in d1 → 0.73% in d10) while `disputed` rises monotonically
+      (0.030% → 0.402%). The composite averages a voidability signal against a
+      dispute signal, and is currently 95.5% `resolved_na`.
 - [ ] **Aim linter v2 / Phase 1 at the discriminating kinds, not at ambiguity
       in general.** Among `yes` judgements (ex-disclosed): `subj` 3 contested /
       0 control, `oth` 4/1, `edge` 11/8, `src` 7/9, `thr` 5/7. Only the first

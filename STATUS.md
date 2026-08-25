@@ -3,38 +3,48 @@
 Durable project state: what exists, what is verified, and what is known broken.
 **Read the newest file in `Handover/` first** — it carries what is in flight and
 supersedes anything here that contradicts it. Companions: `TODO.md` (backlog),
-`RECOVERY.md` (backfill plan), `docs/DECISIONS.md` (ADR-0001..0021),
+`RECOVERY.md` (backfill plan), `docs/DECISIONS.md` (ADR-0001..0022),
 `docs/DEPLOY.md` (the VPS runbook), `MARKETING.md` (go-to-market),
 `docs/PLAN.md` (product scope).
 
 ## One-paragraph summary
 
-Phase 0 infrastructure is complete and **the backfill is running on a Hetzner
-CPX22, not this laptop** — two thermal shutdowns killed local runs, so the
-database was dumped and restored onto a VPS (`docs/DEPLOY.md`). The Gamma pass
-is done (2,615,958 markets, same number of listing-time rules versions), the
-linter has run over the whole corpus (5,183,533 hits at `linter-v1.0.0`; v1.1.0
-adds two rules and will re-lint), and labels have been computed on partial chain
-data (42,278 contested, of which 42,138 are `resolved_na` and 141 `disputed`).
-The Polygon sweep is mid-flight past block ~82.6M of ~92.6M. Nothing has been
-published; the CSV/Parquet exports on disk are stale.
+Phase 0 infrastructure is complete and **the whole pipeline has now run end to
+end on a Hetzner CPX22, not this laptop** — two thermal shutdowns killed local
+runs, so the database was dumped and restored onto a VPS (`docs/DEPLOY.md`).
+Both chain backfills are **complete**: Polygon 9,496,937 events to head
+(92,626,114), Ethereum 4,141 events + 2,023,767 votes. The corpus is 2,615,958
+markets, linted at `linter-v1.1.0` (5,670,580 hits), labelled (44,726
+contested), exported, and **`validate` returns OK — the dispute sanity gate
+passes** at 1,509 Jan–May 2026 disputes against a 1,000 threshold. Nothing has
+been published.
 
-**The measured picture so far:** listing-time text carries a real but modest
-signal — roughly 1.5–2x once category composition is controlled for, agreeing
-across two independent methods (a blinded human-judgement study at 1.46x, and
-stratified rule lift at 0.93–2.02x). Uncontrolled numbers said 20x and were
-wrong. See ADR-0020 for the label-design problem this exposed.
+**The measured picture, now at full scale:** listing-time text carries a real
+but modest signal. `vague-source` — the rule the roadmap was gating on — came in
+at **1.57x** stratified against `disputed` (1.61x in the top volume decile), not
+the 2.02x measured on 21x fewer positives. Three independent methods now agree
+on 1.4–1.6x: a blinded human-judgement study (1.46x matched), stratified rule
+lift, and the full-corpus rerun. Uncontrolled numbers said 20x and were wrong.
+This should stop being re-litigated. See ADR-0020 for the label-design problem
+this exposed, and ADR-0022 for the memory failure that delayed it a day.
 
-## Database (this laptop; the VPS copy is ahead on `resolution_events`)
+## Database (on the VPS — this laptop's copy is now behind)
 
 | Table | Rows | Meaning |
 |---|---:|---|
 | `markets` | 2,615,958 | Gamma pass complete (both cursors `done: true`) |
 | `rules_versions` | 2,615,958 | One listing-time (v1) row per market |
-| `linter_hits` | 5,183,533 | Full corpus at `linter-v1.0.0` |
-| `resolution_events` | 56,833 | Partial — the VPS run is well ahead of this |
-| `ambiguity_labels` | 2,615,958 | 42,278 contested · 141 disputed · 0 escalated |
+| `linter_hits` | 5,670,580 | Full corpus at `linter-v1.1.0` |
+| `resolution_events` | 9,501,078 | **Complete** — Polygon + Ethereum both at head |
+| `votes` | 2,023,767 | DVM votes, only 3,359 distinct request times |
+| `disputes` | 4,127 | 2,566 joined to a market; 1,561 orphaned (P0) |
+| `ambiguity_labels` | 2,615,958 | 44,726 contested · 42,709 `resolved_na` · 2,089 disputed · 6 escalated |
 | `audit_log` | 31,000+ | Hash chain, verified intact |
+
+**`contested` is currently just `resolved_na OR disputed`.** `escalated`
+contributes 6 markets and `rules_edited_after_listing` zero (it needs the
+recurring worker to have run for weeks). Do not describe the composite label as
+four-component in any external material until that changes.
 
 **Backups exist** (`../backups/*.dump`, ~850 MB total, 2026-08-24). No longer
 single-copy. `linter_hits` and `rules_clauses` are deliberately excluded — they
@@ -46,26 +56,31 @@ Rule fire rates across the corpus: `hedge-words` 57.3% · `no-na-condition`
 (unreachable: every market is binary, so its `<= 2 outcomes` guard always
 returns early — see the note in `packages/linter/src/index.ts`).
 
-**198 DisputePrice events is the number the sanity gate is measured against**
-(`TODO.md` wants ~1,000+ for Jan–May 2026 alone). That is expected for a
-partial, pre-V4 sweep — it is not yet evidence of a bug.
+**The sanity gate passes.** 4,127 `DisputePrice` events total, **1,509 in
+Jan–May 2026** against the ~1,000 threshold `TODO.md` set. `validate` returns
+`RESULT: OK`.
 
-**Disputes on MOOv2 are the one link still unobserved.** The ADR-0014 probe
-window captured 8,430 `ProposePrice` and 6,881 `Settle` on the managed oracle
-but **zero `DisputePrice`**. That is consistent with disputes simply being
-rare (~7/day would predict ~3 in that window, so 0 is ~5% likely), but the
-composite label depends on this event. If the full scan also yields ~0
-disputes, suspect the `requester`-filtered OO query or MOOv2 routing disputes
-through a different event — and compare against a known dispute on
-Polygonscan before trusting any number.
+**The MOOv2 question is answered: disputes are suppressed, not eliminated.**
+The ADR-0014 probe window saw zero `DisputePrice` on the managed oracle, and
+that was simply rarity as suspected — the full scan finds **2,350 MOOv2
+disputes** spanning 2025-08-25 to 2026-08-25:
 
-**There is no `chain:polygon:lastBlock` row.** `ingest_state` holds only the
-two Gamma cursors. So the "poisoned checkpoint" described in `RECOVERY.md`
-§0.1 is already absent: `ingest-chain --reset-cursor` will delete nothing and
-report zero rows, which is **not a failure** — the next run starts from the
-configured genesis either way, which is what the V4 fix requires. The 31,573
-existing events dedupe on `(chain, tx_hash, log_index)`, so re-scanning is a
-safe no-op over them.
+| Oracle | Proposals | Disputes | Rate |
+|---|---:|---:|---:|
+| `oov2` | 162,617 | 1,777 | 1.093% |
+| `moov2` | 1,797,469 | 2,350 | **0.131%** |
+
+An **8.4x collapse** after the 2025-09-05 proposer whitelist, closely matching
+the 0.113% the external research predicted. So the `requester`-filtered OO query
+is fine and MOOv2 does not route disputes through a different event. Nothing is
+broken; the label is just scarcer per market than pre-2025 history implies, and
+**any rate quoted across the 2025-09-05 break is a blend of two populations.**
+
+**Both chain cursors exist and are at head.** `chain:polygon:lastBlock` is
+92,626,114; Ethereum is complete through 25,830,831. The "poisoned checkpoint"
+scenario in `RECOVERY.md` §0.1 is historical — re-running an indexer now resumes
+from head and does nothing, which is correct. Events still dedupe on
+`(chain, tx_hash, log_index)`, so re-scanning any range remains a safe no-op.
 
 ## The checksum fix — committed and pushed 2026-08-23
 
