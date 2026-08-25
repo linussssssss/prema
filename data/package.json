@@ -9,6 +9,7 @@
     "postmortem": "tsx src/postmortem.ts",
     "blind-study": "tsx src/cli-blind-study.ts",
     "analyze:signal": "tsx src/cli-analyze-signal.ts",
+    "analyze:drift": "tsx src/cli-rules-drift.ts",
     "site-export": "tsx src/cli-site-export.ts"
   },
   "dependencies": {
